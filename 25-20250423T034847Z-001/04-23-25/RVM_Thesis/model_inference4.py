@@ -7,6 +7,7 @@ Press the button to capture and classify an image
 Results are displayed on the LCD display
 Images are saved with sequential naming in a specified folder
 Communicates with Arduino via USB Serial connection with auto-detection
+Controls MG995 360-degree servo for waste handling
 """
 
 import time
@@ -25,6 +26,14 @@ import serial.tools.list_ports
 
 # GPIO setup
 BUTTON_PIN = 17  # Button for user input
+SERVO_PIN = 18   # GPIO pin for MG995 servo control
+
+# Servo configuration
+SERVO_FREQ = 50  # Standard servo PWM frequency (50Hz)
+SERVO_STOP = 7.5  # Stop position (1.5ms pulse)
+SERVO_CW = 10.0   # Clockwise rotation (2.0ms pulse)
+SERVO_CCW = 5.0   # Counter-clockwise rotation (1.0ms pulse)
+SERVO_RUNTIME = 3.0  # How long to run servo when activated (seconds)
 
 # Serial communication setup
 BAUD_RATE = 9600
@@ -49,6 +58,7 @@ arduino_ready = False
 arduino_processing = False  # New flag to track if Arduino is actively processing
 serial_lock = threading.Lock()
 last_command_time = 0  # Track when the last command was sent
+servo_pwm = None  # Global PWM object for servo control
 
 def find_arduino_port():
     """
@@ -190,14 +200,20 @@ def serial_reader_thread():
             time.sleep(1)
 
 def initialize_hardware():
-    """Initialize camera, LCD, GPIO, serial, and model"""
-    global ser, arduino_ready
+    """Initialize camera, LCD, GPIO, serial, servo, and model"""
+    global ser, arduino_ready, servo_pwm
     
     print("Initializing hardware...")
     
     # Set up GPIO
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    
+    # Set up servo
+    GPIO.setup(SERVO_PIN, GPIO.OUT)
+    servo_pwm = GPIO.PWM(SERVO_PIN, SERVO_FREQ)
+    servo_pwm.start(SERVO_STOP)  # Start with servo stopped
+    print(f"Servo initialized on pin {SERVO_PIN}")
     
     # Auto-detect Arduino
     arduino_port = find_arduino_port()
@@ -279,6 +295,8 @@ def initialize_hardware():
 
 def cleanup(picam2, lcd):
     """Clean up resources"""
+    global servo_pwm
+    
     if picam2:
         picam2.stop()
     
@@ -293,6 +311,10 @@ def cleanup(picam2, lcd):
         with serial_lock:
             ser.write(b"SHUTDOWN\n")
             ser.close()
+    
+    # Cleanup servo
+    if servo_pwm:
+        servo_pwm.stop()
     
     GPIO.cleanup()
     print("Cleanup complete")
@@ -364,6 +386,33 @@ def wait_for_arduino_ready():
     
     print("Arduino is ready for next item")
 
+def control_servo_for_waste():
+    """Control servo to rotate 360 degrees when waste is detected"""
+    global servo_pwm
+    
+    if not servo_pwm:
+        print("Servo not initialized")
+        return
+    
+    try:
+        print("Activating servo for waste handling...")
+        
+        # Start rotating clockwise (adjust direction as needed)
+        servo_pwm.ChangeDutyCycle(SERVO_CW)
+        
+        # Run for specified time
+        time.sleep(SERVO_RUNTIME)
+        
+        # Stop servo
+        servo_pwm.ChangeDutyCycle(SERVO_STOP)
+        print("Servo rotation complete")
+        
+    except Exception as e:
+        print(f"Error controlling servo: {e}")
+        # Make sure to stop servo in case of error
+        if servo_pwm:
+            servo_pwm.ChangeDutyCycle(SERVO_STOP)
+
 def main():
     global arduino_ready, arduino_processing
     
@@ -426,6 +475,15 @@ def main():
                         lcd.write_string(f"Confidence: {confidence:.2f}")
                         lcd.cursor_pos = (2, 0)
                         lcd.write_string(f"Saved: {os.path.basename(saved_path)}")
+                    
+                    # Handle waste detection with servo control
+                    if not is_plastic:  # If it's waste
+                        if lcd:
+                            lcd.cursor_pos = (3, 0)
+                            lcd.write_string("Moving waste bin...")
+                        
+                        # Activate the servo for waste handling
+                        control_servo_for_waste()
                     
                     # Only send to Arduino if we have a connection
                     if ser:
