@@ -2,7 +2,7 @@
 ## An Intelligent Material Detection Using Deep Learning and Reverse Vending Machine with Cat Food Reward System
 
 ### Members:
-* ** Leader: Esteves, Jhuvic
+** Leader: Esteves, Jhuvic
 * Acuna, Lanz
 * Belen, Eadric
 * Madamba, Jarl
