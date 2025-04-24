@@ -1,7 +1,7 @@
 # RVM Thesis Repo
-## An Intelligent Material Detection Using Deep Learning and Reverse Vending Machine with Cat Food Reward System
+### An Intelligent Material Detection Using Deep Learning and Reverse Vending Machine with Cat Food Reward System
 
-### Members:
+##### Members:
 **Leader: Esteves, Jhuvic**
 * Acuna, Lanz
 * Belen, Eadric
@@ -11,7 +11,7 @@
 ---
 ---
 
-** Pending Tasks:
+**Pending Tasks:**
 - [ ] Fix Accuracy and Confidence Level
 - [ ] Fix Load cell readings / load cell wirings
 - [ ] Fix Ultrasonic Readings
