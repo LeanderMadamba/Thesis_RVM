@@ -9,21 +9,18 @@ This document provides the complete wiring connections for all components in the
 - 20x4 I2C LCD Display Module
 - Pushbutton
 - SIM800L v2 GSM Module
-- 6V DC Motor
+- L298N Motor Driver + DC Worm Gear Motor SGM-370 (6V)
 - MG995R Servo Motor (360 degrees)
 - MG996R Servo Motor (160 degrees)
 - 2x HC-SR04 Ultrasonic Sensors
 - 10kg Load Cell with HX711 Amplifier
-- NPN Transistor (e.g., TIP120, 2N2222)
-- 1K resistor
-- 1N4001 diode (for motor protection)
 
 ## Power Supply Requirements
 - Raspberry Pi: 5V/3A via USB-C
 - Arduino Mega: 7-12V DC via barrel jack
 - SIM800L v2: 3.7-4.2V DC (requires separate power supply)
 - Servo Motors: 5-6V DC (separate power supply recommended)
-- DC Motor: 6V DC
+- L298N Motor Driver: 12V DC for motor power
 - HC-SR04 & HX711: 5V DC (can be powered from Arduino)
 
 ## Wiring Connections
@@ -31,9 +28,7 @@ This document provides the complete wiring connections for all components in the
 ### Raspberry Pi to Arduino Communication
 | Raspberry Pi Pin | Arduino Mega Pin | Function |
 |------------------|------------------|----------|
-| GPIO 27 (Pin 13) | Digital Pin 4    | Classification signal (HIGH = plastic, LOW = waste) |
-| GPIO 22 (Pin 15) | Digital Pin 5    | Ready signal from Arduino to Raspberry Pi |
-| GND (Pin 6)      | GND              | Common ground |
+| USB Port         | USB Port         | Serial communication for commands |
 
 ### Raspberry Pi Components
 
@@ -62,19 +57,21 @@ This document provides the complete wiring connections for all components in the
 |-------------|--------------------------------|
 | VCC         | External 3.7-4.2V power supply |
 | GND         | GND                            |
-| RXD         | Pin 18 (TX1)                   |
-| TXD         | Pin 19 (RX1)                   |
+| RXD         | Pin 19 (TX1)                   |
+| TXD         | Pin 18 (RX1)                   |
 | RST         | Pin 7                          |
 
-#### DC Motor with Transistor
-| Component      | Connection                           |
-|----------------|--------------------------------------|
-| Arduino Pin 6  | 1K resistor → Transistor Base        |
-| Transistor Emitter | GND                              |
-| Transistor Collector | Motor negative terminal        |
-| Motor positive | External 6V power supply positive    |
-| Power supply GND | GND (common with Arduino GND)      |
-| 1N4001 diode   | Across motor terminals (cathode to positive) |
+#### L298N Motor Driver with DC Motor
+| L298N Pin        | Arduino Mega Pin / Power Supply       |
+|------------------|--------------------------------------|
+| ENA              | Pin 6 (PWM)                          |
+| IN1              | Pin 8                                |
+| IN2              | Pin 7                                |
+| OUT1             | DC Motor Terminal 1                  |
+| OUT2             | DC Motor Terminal 2                  |
+| +12V             | External 12V power supply positive   |
+| GND              | GND (common with Arduino GND)        |
+| 5V (if needed)   | Not connected (remove jumper if using external power) |
 
 #### MG995R Servo Motor (360 degrees)
 | Servo Pin     | Arduino Mega Pin / Power Supply |
@@ -90,15 +87,15 @@ This document provides the complete wiring connections for all components in the
 | VCC (Red)     | External 5-6V Power Supply     |
 | GND (Brown)   | GND                            |
 
-#### HC-SR04 Ultrasonic Sensor #1
+#### HC-SR04 Ultrasonic Sensor #1 (Container 1)
 | HC-SR04 Pin | Arduino Mega Pin |
 |-------------|------------------|
 | VCC         | 5V               |
-| Trig        | Pin 24           |
-| Echo        | Pin 25           |
+| Trig        | Pin 30           |
+| Echo        | Pin 32           |
 | GND         | GND              |
 
-#### HC-SR04 Ultrasonic Sensor #2
+#### HC-SR04 Ultrasonic Sensor #2 (Container 2)
 | HC-SR04 Pin | Arduino Mega Pin |
 |-------------|------------------|
 | VCC         | 5V               |
@@ -141,7 +138,7 @@ This document provides the complete wiring connections for all components in the
 +------------------+     +-------------+
                               ^
                               |
-       GPIO 27 (Plastic Signal)
+           USB Serial Communication
          |
          v
 +------------------+
@@ -161,14 +158,40 @@ This document provides the complete wiring connections for all components in the
         |         |
      +--+--+   +--+--+
      |     |   |     |
-     |Motor|   |Ultra|
-     |     |   |sonic|
-     +-----+   +-----+
+  +--+L298N|   |Ultra|
+  |  |Motor|   |sonic|
+  |  |Driver   |Sensor
+  |  +-----+   +-----+
+  |
+  v
++-----+
+|     |
+|DC   |
+|Motor|
++-----+
 ```
+
+## Configuration Notes
+
+### Load Cell Calibration
+- The system uses a calibration factor of 750 for the load cell
+- You may need to adjust this value based on your specific load cell and setup
+- Use the WEIGHT_TEST command via serial to check and calibrate the load cell
+
+### DC Motor Control
+- The L298N driver allows for speed control via PWM and direction control
+- Make sure the jumper on L298N is removed if using an external power supply
+- The system uses pins 6 (PWM), 8 (IN1), and 7 (IN2) for motor control
+
+### Ultrasonic Sensors
+- Sensors are positioned to monitor container fullness
+- Keep sensors away from soft or sound-absorbing surfaces
+- The system is configured to detect obstructions when distance < 10cm
+- Container heights are set to 90cm in the code (adjust based on your containers)
 
 ## Safety Notes
 1. Always double-check connections before powering on
 2. Ensure common ground between Raspberry Pi, Arduino, and all power supplies
 3. Do not exceed the current limits of GPIO pins (Raspberry Pi: 16mA per pin, Arduino: 40mA per pin)
-4. Use appropriate heat sinks for the transistor if the motor draws significant current
-5. For high-current devices (motors, GSM module), use separate power supplies 
+4. For high-current devices (motors, GSM module), use separate power supplies
+5. The L298N motor driver can get hot during operation - ensure proper ventilation 

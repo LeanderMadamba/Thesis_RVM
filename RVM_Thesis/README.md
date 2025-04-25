@@ -1,15 +1,34 @@
-# RVM Project - Raspberry Pi Setup and Usage
+# RVM Project - Raspberry Pi and Arduino Integration
 
-This project implements a machine learning model for waste classification (plastic vs. waste) using a Raspberry Pi 4, OV5647 Camera Module, 20x4 I2C LCD Display, and a pushbutton for user input.
+This project implements a machine learning model for waste classification (plastic vs. waste) using a Raspberry Pi 4, OV5647 Camera Module, 20x4 I2C LCD Display, a pushbutton for user input, and an integrated Arduino-controlled mechanical system.
+
+## System Overview
+
+This system creates a complete Reverse Vending Machine (RVM) that:
+1. Captures images of waste items using the camera
+2. Classifies items as plastic or waste using a machine learning model
+3. Controls mechanical components via Arduino for sorting and processing
+4. Provides user feedback via LCD display
+5. Monitors container fullness and detects obstructions
+6. Sends SMS notifications when containers are full or obstructions are detected
 
 ## Hardware Components
 
+### Raspberry Pi Side
 - Raspberry Pi 4 Model B
 - OV5647 Camera Module
 - 20x4 I2C LCD Display Module
 - Pushbutton
 - Jumper wires
-- Breadboard (optional)
+
+### Arduino Side
+- Arduino Mega 2560
+- SIM800L v2 GSM Module
+- L298N Motor Driver + DC Worm Gear Motor SGM-370
+- MG995R Servo Motor (360 degrees)
+- MG996R Servo Motor (160 degrees)
+- 2x HC-SR04 Ultrasonic Sensors
+- 10kg Load Cell with HX711 Amplifier
 
 ## Hardware Connection Instructions
 
@@ -43,6 +62,14 @@ The button requires one GPIO pin and ground:
 
 Note: The button is configured with an internal pull-up resistor in software, so no external resistor is needed.
 
+### Raspberry Pi to Arduino Connection
+
+Connect the Raspberry Pi to the Arduino Mega using a USB cable. This provides both power to the Arduino and a serial communication channel.
+
+### Arduino Components
+
+For detailed wiring of the Arduino components, see the `Arduino_Wiring_Diagram_Updated.md` file in the `Arduino_Code` directory.
+
 ## Software Setup
 
 ### 1. Enable Camera and I2C Interface
@@ -67,10 +94,22 @@ sudo apt install -y python3-pip python3-opencv i2c-tools
 ### 3. Install Required Python Libraries
 
 ```bash
-pip3 install picamera2 numpy pillow tensorflow RPLCD RPi.GPIO
+pip3 install picamera2 numpy pillow tensorflow RPLCD RPi.GPIO pyserial
 ```
 
-### 4. Test Individual Components
+### 4. Upload Arduino Code
+
+1. Install the Arduino IDE on your development computer
+2. Install required libraries via Arduino Library Manager:
+   - HX711 library by Bogdan Necula
+   - Servo
+   - SoftwareSerial
+3. Open the `RVM_Controller_Serial.ino` file from the `Arduino_Code/RVM_Controller_Serial` directory
+4. Connect the Arduino Mega to your computer via USB
+5. Select the correct board (Arduino Mega 2560) and port in the Arduino IDE
+6. Upload the code to the Arduino
+
+### 5. Test Individual Components
 
 #### Camera Test
 
@@ -104,17 +143,45 @@ python3 button_test.py
 
 Press the button and verify that the program detects the button presses.
 
-### 5. Transfer Model and Run Inference
-
-1. Transfer your trained model file `binary_classification_plastic_vs_waste.keras` to the Raspberry Pi
-2. Run the inference script:
+#### Arduino Serial Communication Test
 
 ```bash
-python3 model_inference.py
+python3 arduino_serial_test.py
 ```
 
-3. Press the button to capture an image and perform classification
-4. View results on the LCD display
+This will attempt to establish communication with the Arduino and run basic tests.
+
+### 6. Run the Full System
+
+1. Transfer your trained model file `RVM_Model_mk6.keras` to the Raspberry Pi
+2. Connect all components according to the wiring diagrams
+3. Run the inference script:
+
+```bash
+python3 model_inference4.py
+```
+
+4. Press the button to capture an image and perform classification
+5. View results on the LCD display
+6. The Arduino will automatically process the item based on the classification
+
+## System Diagnostic and Maintenance
+
+### Arduino Commands
+You can send these commands directly to the Arduino for testing and diagnostics:
+- `HELLO` - Test communication
+- `STATUS` - Check if the system is ready
+- `CHECK_CONTAINERS` - Check container fullness
+- `CHECK_OBSTRUCTIONS` - Check for obstructions
+- `MOTOR_TEST` - Test the DC motor
+- `WEIGHT_TEST` - Test the load cell
+
+### Checking Container Status
+The system automatically checks container fullness every hour. You can also run:
+
+```bash
+python3 container_check.py
+```
 
 ## Troubleshooting
 
@@ -133,9 +200,26 @@ python3 model_inference.py
 - Check for interference or debounce issues
 - Ensure GPIO is properly initialized in code
 
-## Scripts Description
+### Arduino Communication Issues
+- Check USB connection between Raspberry Pi and Arduino
+- Verify the correct port is being used (usually /dev/ttyACM0 or /dev/ttyUSB0)
+- Run `dmesg | tail` after connecting the Arduino to see if it's detected
+- Ensure the Arduino is running the correct firmware
+- Check the BAUD rate (should be 9600)
 
+### Mechanical Component Issues
+- For detailed troubleshooting of Arduino components, see the `Arduino_README.md` file in the `Arduino_Code` directory
+
+## Files Description
+
+### Raspberry Pi Scripts
 - `camera_test.py` - Tests the OV5647 Camera module functionality
 - `lcd_test.py` - Tests the 20x4 I2C LCD display
 - `button_test.py` - Tests the pushbutton input
-- `model_inference.py` - Combines all components for image capture and classification 
+- `arduino_serial_test.py` - Tests communication with Arduino
+- `model_inference4.py` - Main system script that combines all components
+- `container_check.py` - Utility to check container fullness
+
+### Arduino Files
+- `RVM_Controller_Serial.ino` - Main Arduino control program
+- Various test sketches for individual components 

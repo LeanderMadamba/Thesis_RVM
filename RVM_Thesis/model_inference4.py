@@ -7,7 +7,10 @@ Press the button to capture and classify an image
 Results are displayed on the LCD display
 Images are saved with sequential naming in a specified folder
 Communicates with Arduino via USB Serial connection with auto-detection
-Controls MG995 360-degree servo for waste handling
+Controls Arduino-based hardware components for waste handling:
+- Load cell for weight measurement (from Load_cell_test.ino)
+- DC motor with L298N driver (from Mothafuckin_dc_motorz.ino)
+- Ultrasonic sensors for container fullness detection (from Thesis_containers.ino)
 """
 
 import time
@@ -413,6 +416,100 @@ def control_servo_for_waste():
         if servo_pwm:
             servo_pwm.ChangeDutyCycle(SERVO_STOP)
 
+def check_container_fullness():
+    """Request Arduino to check if containers are full"""
+    if not ser:
+        print("Serial connection not available. Cannot check containers.")
+        return False
+    
+    if arduino_ready:
+        arduino_ready = False  # Mark as busy
+        arduino_processing = True  # Mark as processing
+        
+        # Send container check command
+        send_command_to_arduino("CHECK_CONTAINERS")
+        
+        # Wait for Arduino to complete the check
+        wait_for_arduino_ready()
+        return True
+    else:
+        print("Arduino busy. Cannot check containers now.")
+        return False
+
+def test_dc_motor():
+    """Test the DC motor"""
+    if not ser:
+        print("Serial connection not available. Cannot test motor.")
+        return False
+    
+    if arduino_ready:
+        arduino_ready = False  # Mark as busy
+        arduino_processing = True  # Mark as processing
+        
+        # Send motor test command
+        send_command_to_arduino("MOTOR_TEST")
+        
+        # Wait for Arduino to complete the test
+        wait_for_arduino_ready()
+        return True
+    else:
+        print("Arduino busy. Cannot test motor now.")
+        return False
+
+def test_weight_sensor():
+    """Test the load cell weight sensor"""
+    if not ser:
+        print("Serial connection not available. Cannot test weight sensor.")
+        return False
+    
+    if arduino_ready:
+        arduino_ready = False  # Mark as busy
+        arduino_processing = True  # Mark as processing
+        
+        # Send weight test command
+        send_command_to_arduino("WEIGHT_TEST")
+        
+        # Wait for Arduino to complete the test
+        wait_for_arduino_ready()
+        return True
+    else:
+        print("Arduino busy. Cannot test weight sensor now.")
+        return False
+
+def system_diagnostic():
+    """Run diagnostic tests on all hardware components"""
+    print("Starting system diagnostic...")
+    
+    if not ser:
+        print("Arduino not connected. Cannot run full diagnostics.")
+        return
+    
+    # Check Arduino status
+    check_arduino_status()
+    
+    # Test DC motor
+    if arduino_ready:
+        print("Testing DC motor...")
+        test_dc_motor()
+    
+    # Test weight sensor
+    if arduino_ready:
+        print("Testing weight sensor...")
+        test_weight_sensor()
+    
+    # Check container fullness
+    if arduino_ready:
+        print("Checking container fullness...")
+        check_container_fullness()
+    
+    # Check for obstructions
+    if arduino_ready:
+        print("Checking for obstructions...")
+        send_command_to_arduino("CHECK_OBSTRUCTIONS")
+        wait_for_arduino_ready()
+    
+    print("System diagnostic complete")
+
 def main():
     global arduino_ready, arduino_processing
     
@@ -432,6 +529,7 @@ def main():
         arduino_ready = True
     
     status_check_time = time.time()
+    container_check_time = time.time()
     
     try:
         while True:
@@ -532,6 +630,13 @@ def main():
                         check_arduino_status()
                     
                     status_check_time = current_time
+            
+            # Check container fullness every hour
+            current_time = time.time()
+            if ser and arduino_ready and current_time - container_check_time > 3600:  # Every hour
+                print("Performing routine container fullness check...")
+                check_container_fullness()
+                container_check_time = current_time
             
             time.sleep(0.1)  # Reduce CPU usage
             

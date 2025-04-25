@@ -5,16 +5,16 @@
  * This script:
  * 1. Receives commands from Raspberry Pi via USB serial
  * 2. Processes "PLASTIC" or "WASTE" commands
- * 3. If plastic, measures weight using load cell
+ * 3. If plastic, measures weight using load cell (integrated from Load_cell_test.ino)
  * 4. Controls servo mechanisms based on weight (>50g or <=50g)
- * 5. Controls DC motor
- * 6. Monitors ultrasonic sensors for obstructions
+ * 5. Controls DC motor using L298N driver (integrated from dc_motorz.ino)
+ * 6. Monitors ultrasonic sensors for obstructions (integrated from Thesis_containers.ino)
  * 7. Sends SMS notification if obstructions detected
  * 
  * Hardware:
  * - Arduino Mega 2560
  * - SIM800L v2 GSM Module
- * - 6V DC Motor with transistor driver
+ * - L298N Motor Driver + DC Worm Gear Motor SGM-370
  * - MG995R Servo Motor (360 degrees)
  * - MG996R Servo Motor (160 degrees)
  * - 2x HC-SR04 Ultrasonic Sensors
@@ -34,13 +34,15 @@
 #define SERVO_360_PIN 9     // MG995R 360-degree servo
 #define SERVO_160_PIN 10    // MG996R 160-degree servo
 
-// DC Motor
-#define MOTOR_PIN 6         // DC motor control
+// DC Motor with L298N Driver
+#define MOTOR_ENA 6         // PWM control for DC motor (renamed from MOTOR_PIN)
+#define MOTOR_IN1 8         // Direction control 1
+#define MOTOR_IN2 7         // Direction control 2
 
 // Load Cell
 #define LOADCELL_DOUT_PIN 3
 #define LOADCELL_SCK_PIN 2
-#define CALIBRATION_FACTOR -455.0 // Adjust based on calibration
+#define CALIBRATION_FACTOR 750 // Adjust based on calibration
 
 // Ultrasonic Sensors
 #define TRIG_PIN_1 30
@@ -49,8 +51,8 @@
 #define ECHO_PIN_2 27
 
 // Constants
-#define SOUND_SPEED 0.034   // Speed of sound in cm/microsecond
-#define WEIGHT_THRESHOLD 50 // Weight threshold in grams
+#define SOUND_SPEED 0.034     // Speed of sound in cm/microsecond
+#define WEIGHT_THRESHOLD 50   // Weight threshold in grams
 #define DISTANCE_THRESHOLD 10 // Distance threshold in cm for obstruction detection
 #define PHONE_NUMBER "+639278557480" // Updated with country code format
 
@@ -70,6 +72,10 @@ bool obstructionDetected = false;
 String inputBuffer = "";
 bool inputComplete = false;
 
+// Container parameters for ultrasonic sensors
+const float container1Height = 90.0;  // Container 1 height in cm
+const float container2Height = 90.0;  // Container 2 height in cm
+
 void setup() {
   // Initialize serial communication with Raspberry Pi
   Serial.begin(9600);
@@ -78,14 +84,23 @@ void setup() {
   gsmSerial.begin(9600);
   
   // Initialize pins
-  pinMode(MOTOR_PIN, OUTPUT);
+  // DC Motor Pins
+  pinMode(MOTOR_ENA, OUTPUT);
+  pinMode(MOTOR_IN1, OUTPUT);
+  pinMode(MOTOR_IN2, OUTPUT);
+  
+  // Initialize motor in stop state
+  digitalWrite(MOTOR_IN1, LOW);
+  digitalWrite(MOTOR_IN2, LOW);
+  analogWrite(MOTOR_ENA, 0);
+  
+  // Ultrasonic sensor pins
   pinMode(TRIG_PIN_1, OUTPUT);
   pinMode(ECHO_PIN_1, INPUT);
   pinMode(TRIG_PIN_2, OUTPUT);
   pinMode(ECHO_PIN_2, INPUT);
   
   // Set initial states
-  digitalWrite(MOTOR_PIN, LOW); // Motor off
   digitalWrite(TRIG_PIN_1, LOW);
   digitalWrite(TRIG_PIN_2, LOW);
   
@@ -143,8 +158,12 @@ void loop() {
   // Check for incoming serial commands
   checkSerialCommands();
   
-  // Check for obstructions
-  // checkForObstructions();
+  // Check for obstructions periodically
+  static unsigned long lastObstructionCheck = 0;
+  if (millis() - lastObstructionCheck > 5000) { // Check every 5 seconds
+    checkForObstructions();
+    lastObstructionCheck = millis();
+  }
   
   // Small delay to prevent CPU overuse
   delay(10);
@@ -212,6 +231,12 @@ void processCommand(String command) {
     // Stop any active operations
     stopAllMotors();
   }
+  else if (command == "CHECK_CONTAINERS") {
+    // Check container fullness
+    Serial.println("INFO: Checking container fullness...");
+    checkContainerFullness();
+    Serial.println("READY: Container check complete");
+  }
   else if (command == "CHECK_OBSTRUCTIONS") {
     // Explicitly check for obstructions when requested
     Serial.println("INFO: Checking for obstructions...");
@@ -230,6 +255,21 @@ void processCommand(String command) {
     }
     
     Serial.println("READY: Obstruction check complete");
+  }
+  else if (command == "MOTOR_TEST") {
+    // Test DC motor functionality
+    Serial.println("INFO: Running DC motor test...");
+    testDcMotor();
+    Serial.println("READY: DC motor test complete");
+  }
+  else if (command == "WEIGHT_TEST") {
+    // Test weight measurement
+    Serial.println("INFO: Running weight measurement test...");
+    float weight = measureWeight();
+    Serial.print("Weight measurement: ");
+    Serial.print(weight);
+    Serial.println(" g");
+    Serial.println("READY: Weight test complete");
   }
   else {
     // Unknown command
@@ -259,12 +299,12 @@ void processPlasticItem() {
   Serial.println("Checking for obstructions after servo activation...");
   checkForObstructions();
   
-  // Activate motor
-  activateMotor();
+  // Activate DC motor using the L298N driver
+  activateDcMotor();
   
   // Final check for obstructions after everything is complete
-  //Serial.println("Final obstruction check...");
-  //checkForObstructions();
+  Serial.println("Final obstruction check...");
+  checkForObstructions();
 }
 
 void processWasteItem() {
@@ -280,8 +320,8 @@ void processWasteItem() {
   Serial.println("Checking for obstructions after servo activation...");
   checkForObstructions();
   
-  // Activate motor
-  activateMotor();
+  // Activate DC motor using the L298N driver
+  activateDcMotor();
   
   // Final check for obstructions after everything is complete
   Serial.println("Final obstruction check...");
@@ -361,85 +401,214 @@ void activateServo160() {
   Serial.println("INFO: 160-degree servo operation complete");
 }
 
-void activateMotor() {
-  Serial.println("INFO: Activating DC motor");
+// New DC motor function using L298N driver from Mothafuckin_dc_motorz.ino
+void activateDcMotor() {
+  Serial.println("INFO: Activating DC motor with L298N driver");
+  
+  // Set motor direction - forward
+  digitalWrite(MOTOR_IN1, HIGH);
+  digitalWrite(MOTOR_IN2, LOW);
   
   // Ramp up motor speed
-  for (int speed = 0; speed <= 255; speed += 5) {
-    analogWrite(MOTOR_PIN, speed);
-    delay(20);
+  for (int speed = 50; speed <= 255; speed += 15) {
+    analogWrite(MOTOR_ENA, speed);
+    delay(100);
   }
   
   // Run at full speed for 3 seconds
+  analogWrite(MOTOR_ENA, 255);
   delay(3000);
   
   // Ramp down motor speed
-  for (int speed = 255; speed >= 0; speed -= 5) {
-    analogWrite(MOTOR_PIN, speed);
-    delay(20);
+  for (int speed = 255; speed >= 0; speed -= 15) {
+    analogWrite(MOTOR_ENA, speed);
+    delay(100);
   }
   
   // Ensure motor is stopped
-  analogWrite(MOTOR_PIN, 0);
+  analogWrite(MOTOR_ENA, 0);
+  digitalWrite(MOTOR_IN1, LOW);
+  digitalWrite(MOTOR_IN2, LOW);
   
   Serial.println("INFO: DC motor operation complete");
 }
 
-float measureDistance(int trigPin, int echoPin) {
-  // Take average of multiple measurements for stability
-  float totalDistance = 0;
-  int validReadings = 0;
-  int attempts = 5; // Make 5 attempts to get a valid reading
+// Motor test function (from Mothafuckin_dc_motorz.ino)
+void testDcMotor() {
+  // Test motor forward at increasing speeds
+  Serial.println("Running motor forward at increasing speed...");
+  digitalWrite(MOTOR_IN1, HIGH);
+  digitalWrite(MOTOR_IN2, LOW);
   
-  for (int i = 0; i < attempts; i++) {
-    // Clear the trigger pin
-    digitalWrite(trigPin, LOW);
-    delayMicroseconds(2);
-    
-    // Set the trigger pin HIGH for 10 microseconds
-    digitalWrite(trigPin, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(trigPin, LOW);
-    
-    // Read the echo pin, return the sound wave travel time in microseconds
-    // Adjust timeout to avoid waiting too long (15000µs = ~2.5m range)
-    unsigned long duration = pulseIn(echoPin, HIGH, 15000);
-    
-    // If duration is 0, the pulseIn timed out (no echo detected)
-    if (duration > 0) {
-      // Calculate the distance
-      float distance = duration * SOUND_SPEED / 2;
-      
-      // Only accept reasonable distances (0 to 200cm)
-      if (distance > 0 && distance < 200) {
-        totalDistance += distance;
-        validReadings++;
-      }
-    }
-    
-    // Small delay between measurements
-    delay(10);
+  for (int speed = 50; speed <= 255; speed += 51) {
+    Serial.print("Speed: ");
+    Serial.println(speed);
+    analogWrite(MOTOR_ENA, speed);
+    delay(1000);
   }
   
-  // Calculate average distance if we have valid readings
-  if (validReadings > 0) {
-    return totalDistance / validReadings;
+  // Stop the motor
+  Serial.println("Stopping motor...");
+  analogWrite(MOTOR_ENA, 0);
+  delay(1000);
+  
+  // Test motor backward at increasing speeds
+  Serial.println("Running motor backward at increasing speed...");
+  digitalWrite(MOTOR_IN1, LOW);
+  digitalWrite(MOTOR_IN2, HIGH);
+  
+  for (int speed = 50; speed <= 255; speed += 51) {
+    Serial.print("Speed: ");
+    Serial.println(speed);
+    analogWrite(MOTOR_ENA, speed);
+    delay(1000);
+  }
+  
+  // Stop the motor
+  Serial.println("Stopping motor...");
+  analogWrite(MOTOR_ENA, 0);
+  digitalWrite(MOTOR_IN1, LOW);
+  digitalWrite(MOTOR_IN2, LOW);
+  delay(1000);
+}
+
+// Get ultrasonic distance (from Thesis_containers.ino)
+float getUltrasonicDistance(int trigPin, int echoPin) {
+  // Clear the trigPin
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  
+  // Set the trigPin HIGH for 10 microseconds
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  
+  // Read the echoPin (returns the travel time in microseconds)
+  long duration = pulseIn(echoPin, HIGH, 15000); // Added timeout for reliability
+  
+  // Calculate the distance (speed of sound = 0.034 cm/microsecond)
+  // Distance = (Time x Speed) / 2 (divided by 2 because sound travels to object and back)
+  if (duration > 0) {
+    float distance = (duration * SOUND_SPEED) / 2.0;
+    return distance;
   } else {
     return -1; // Return -1 to indicate no valid reading
   }
 }
 
+bool isValidReading(float distance) {
+  // Check if reading is within reasonable bounds
+  // HC-SR04 has a typical range of 2cm to 400cm
+  return (distance >= 2.0 && distance <= 400.0);
+}
+
+// Container fullness check (based on Thesis_containers.ino)
+void checkContainerFullness() {
+  // Variables for tracking fullness status
+  unsigned long container1FullStartTime = 0;
+  unsigned long container2FullStartTime = 0;
+  bool container1PreviouslyFull = false;
+  bool container2PreviouslyFull = false;
+  bool container1VerifiedFull = false;
+  bool container2VerifiedFull = false;
+  
+  // Variables for measurements
+  float distance1, distance2;
+  float fillPercentage1, fillPercentage2;
+  bool isContainer1Full = false;
+  bool isContainer2Full = false;
+  
+  // Variables for timing
+  unsigned long startTime = millis();
+  unsigned long currentTime;
+  unsigned long totalMeasurementTime = 15000; // 15 seconds of measurement
+  unsigned long verificationTime = 5000;      // 5 seconds verification for fullness
+  
+  Serial.println("Measuring containers for 15 seconds...");
+  
+  // Run measurement loop
+  while ((millis() - startTime) < totalMeasurementTime) {
+    // Get readings from both sensors
+    distance1 = getUltrasonicDistance(TRIG_PIN_1, ECHO_PIN_1);
+    delay(50); // Small delay between sensor readings
+    distance2 = getUltrasonicDistance(TRIG_PIN_2, ECHO_PIN_2);
+    
+    currentTime = millis();
+    
+    // Process container 1 status
+    if (isValidReading(distance1)) {
+      fillPercentage1 = max(0, min(100, (container1Height - distance1) / container1Height * 100));
+      isContainer1Full = (distance1 <= DISTANCE_THRESHOLD);
+      
+      // Start or reset timer for container 1
+      if (isContainer1Full && !container1PreviouslyFull) {
+        container1FullStartTime = currentTime;
+        container1PreviouslyFull = true;
+      } else if (!isContainer1Full) {
+        container1PreviouslyFull = false;
+        container1VerifiedFull = false;
+      }
+      
+      // Check if container 1 has been full for the verification time
+      if (isContainer1Full && container1PreviouslyFull && 
+          (currentTime - container1FullStartTime >= verificationTime) && 
+          !container1VerifiedFull) {
+        container1VerifiedFull = true;
+        Serial.print("Container #1 is ");
+        Serial.print(fillPercentage1, 1);
+        Serial.println("% full.");
+      }
+    }
+    
+    // Process container 2 status
+    if (isValidReading(distance2)) {
+      fillPercentage2 = max(0, min(100, (container2Height - distance2) / container2Height * 100));
+      isContainer2Full = (distance2 <= DISTANCE_THRESHOLD);
+      
+      // Start or reset timer for container 2
+      if (isContainer2Full && !container2PreviouslyFull) {
+        container2FullStartTime = currentTime;
+        container2PreviouslyFull = true;
+      } else if (!isContainer2Full) {
+        container2PreviouslyFull = false;
+        container2VerifiedFull = false;
+      }
+      
+      // Check if container 2 has been full for the verification time
+      if (isContainer2Full && container2PreviouslyFull && 
+          (currentTime - container2FullStartTime >= verificationTime) && 
+          !container2VerifiedFull) {
+        container2VerifiedFull = true;
+        Serial.print("Container #2 is ");
+        Serial.print(fillPercentage2, 1);
+        Serial.println("% full.");
+      }
+    }
+    
+    delay(100); // Small delay for stability
+  }
+  
+  // Measurement complete
+  Serial.println("Container measurement completed!");
+  
+  // Report final status if containers weren't verified as full
+  if (!container1VerifiedFull) {
+    Serial.print("Container #1 was not consistently full. Last reading: ");
+    Serial.print(fillPercentage1, 1);
+    Serial.println("% full.");
+  }
+  
+  if (!container2VerifiedFull) {
+    Serial.print("Container #2 was not consistently full. Last reading: ");
+    Serial.print(fillPercentage2, 1);
+    Serial.println("% full.");
+  }
+}
+
 void checkForObstructions() {
   // Measure distances from both sensors
-  float distance1 = measureDistance(TRIG_PIN_1, ECHO_PIN_1);
-  float distance2 = measureDistance(TRIG_PIN_2, ECHO_PIN_2);
-  
-  // Log the distances for troubleshooting (but not as debug spam)
-  //Serial.print("Sensor readings - S1: ");
-  //Serial.print(distance1);
-  //Serial.print(" cm, S2: ");
-  //Serial.print(distance2);
-  //Serial.println(" cm");
+  float distance1 = getUltrasonicDistance(TRIG_PIN_1, ECHO_PIN_1);
+  float distance2 = getUltrasonicDistance(TRIG_PIN_2, ECHO_PIN_2);
   
   // Check if either sensor detects a valid obstruction
   // -1 means no valid reading was obtained
@@ -535,5 +704,10 @@ void stopAllMotors() {
   // Stop all motors and servos
   servo360.write(90);  // Stop position
   servo160.write(90);  // Center position
-  analogWrite(MOTOR_PIN, 0);  // Stop DC motor
+  
+  // Stop DC motor with L298N driver
+  analogWrite(MOTOR_ENA, 0);  // Set speed to 0
+  digitalWrite(MOTOR_IN1, LOW); // Set both direction pins low
+  digitalWrite(MOTOR_IN2, LOW);
 } 
+ 
