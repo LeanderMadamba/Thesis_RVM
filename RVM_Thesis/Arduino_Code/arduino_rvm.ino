@@ -137,6 +137,11 @@ void setup() {
 void loop() {
   checkSerialCommands();
   
+  static unsigned long lastObstructionCheck = 0;
+  if (millis() - lastObstructionCheck > 5000) { // Check every 5 seconds
+    checkForObstructions();
+    lastObstructionCheck = millis();
+  }
   
   delay(10);
 }
