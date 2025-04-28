@@ -507,12 +507,6 @@ def system_diagnostic():
         print("Checking container fullness...")
         check_container_fullness()
     
-    # Check for obstructions
-    if arduino_ready:
-        print("Checking for obstructions...")
-        send_command_to_arduino("CHECK_OBSTRUCTIONS")
-        wait_for_arduino_ready()
-    
     print("System diagnostic complete")
 
 def main():

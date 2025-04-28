@@ -202,19 +202,6 @@ void processCommand(String command) {
     startContainerMeasurement();
     Serial.println("READY: Container check complete");
   }
-  else if (command == "CHECK_OBSTRUCTIONS") {
-    Serial.println("INFO: Checking for obstructions...");
-    obstructionDetected = false;
-    checkForObstructions();
-    
-    if (obstructionDetected) {
-      Serial.println("WARNING: Obstruction detected during explicit check!");
-    } else {
-      Serial.println("INFO: No obstructions detected during explicit check");
-    }
-    
-    Serial.println("READY: Obstruction check complete");
-  }
   else if (command == "MOTOR_TEST") {
     Serial.println("INFO: Running DC motor test...");
     testDcMotor();
@@ -246,13 +233,11 @@ void processPlasticItem() {
     activateServo160();
   }
   
-  Serial.println("Checking for obstructions after servo activation...");
-  checkForObstructions();
+  Serial.println("Checking for fullness of containers...");
+  startContainerMeasurement();
   
   activateDcMotor();
   
-  Serial.println("Final obstruction check...");
-  checkForObstructions();
 }
 
 void processWasteItem() {
@@ -260,13 +245,11 @@ void processWasteItem() {
   
   activateServo360();
   
-  Serial.println("Checking for obstructions after servo activation...");
-  checkForObstructions();
+  Serial.println("Checking for fullness of containers...");
+  startContainerMeasurement();
   
-  activateDcMotor();
+  //activateDcMotor();
   
-  Serial.println("Final obstruction check...");
-  checkForObstructions();
 }
 
 float measureWeight() {
@@ -275,7 +258,7 @@ float measureWeight() {
     float weight = 0;
     int validReadings = 0;
     
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 5; i++) {
       float reading = scale.get_units();
       if (reading >= 0 && reading < 1000) {
         weight += reading;
@@ -385,26 +368,6 @@ void testDcMotor() {
   delay(1000);
 }
 
-float getUltrasonicDistance(int trigPin, int echoPin) {
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(trigPin, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(trigPin, LOW);
-  
-  long duration = pulseIn(echoPin, HIGH, 15000);
-  
-  if (duration > 0) {
-    float distance = (duration * SOUND_SPEED) / 2.0;
-    return distance;
-  } else {
-    return -1;
-  }
-}
-
-bool isValidReading(float distance) {
-  return (distance >= 2.0 && distance <= 400.0);
-}
 
 // Integrated from Thesis_containers.ino
 void startContainerMeasurement() {
@@ -507,39 +470,7 @@ void startContainerMeasurement() {
   }
 }
 
-void checkForObstructions() {
-  float distance1 = getUltrasonicDistance(TRIG_PIN_1, ECHO_PIN_1);
-  float distance2 = getUltrasonicDistance(TRIG_PIN_2, ECHO_PIN_2);
-  
-  bool sensor1_obstruction = (distance1 > 0 && distance1 < DISTANCE_THRESHOLD);
-  bool sensor2_obstruction = (distance2 > 0 && distance2 < DISTANCE_THRESHOLD);
-  
-  if (sensor1_obstruction || sensor2_obstruction) {
-    if (!obstructionDetected) {
-      obstructionDetected = true;
-      Serial.println("WARNING: Obstruction detected!");
-      
-      gsmSerial.println("AT");
-      delay(500);
-      
-      String message = "RVM Alert: Obstruction detected.";
-      
-      if (sensor1_obstruction) {
-        message += " S1:" + String(distance1, 1) + "cm";
-      }
-      if (sensor2_obstruction) {
-        message += " S2:" + String(distance2, 1) + "cm";
-      }
-      
-      sendSMS(message);
-    }
-  } else {
-    if (obstructionDetected) {
-      obstructionDetected = false;
-      Serial.println("INFO: Obstruction cleared");
-    }
-  }
-}
+
 
 void sendSMS(String message) {
   Serial.println("INFO: Sending SMS...");
