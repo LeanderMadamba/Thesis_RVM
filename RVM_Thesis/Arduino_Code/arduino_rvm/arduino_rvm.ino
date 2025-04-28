@@ -137,11 +137,6 @@ void setup() {
 void loop() {
   checkSerialCommands();
   
-  static unsigned long lastObstructionCheck = 0;
-  if (millis() - lastObstructionCheck > 5000) { // Check every 5 seconds
-    checkForObstructions();
-    lastObstructionCheck = millis();
-  }
   
   delay(10);
 }
@@ -470,7 +465,31 @@ void startContainerMeasurement() {
   }
 }
 
+float getUltrasonicDistance(int trigPin, int echoPin) {
+  // Clear the trigPin
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  
+  // Set the trigPin HIGH for 10 microseconds
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  
+  // Read the echoPin (returns the travel time in microseconds)
+  long duration = pulseIn(echoPin, HIGH);
+  
+  // Calculate the distance (speed of sound = 0.034 cm/microsecond)
+  // Distance = (Time x Speed) / 2 (divided by 2 because sound travels to object and back)
+  float distance = (duration * 0.034) / 2.0;
+  
+  return distance;
+}
 
+bool isValidReading(float distance) {
+  // Check if reading is within reasonable bounds
+  // HC-SR04 has a typical range of 2cm to 400cm
+  return (distance >= 2.0 && distance <= 400.0);
+}
 
 void sendSMS(String message) {
   Serial.println("INFO: Sending SMS...");
