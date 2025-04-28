@@ -39,16 +39,16 @@
 #define CALIBRATION_FACTOR 750
 
 // Ultrasonic Sensors
-#define TRIG_PIN_1 24
-#define ECHO_PIN_1 25
-#define TRIG_PIN_2 22
-#define ECHO_PIN_2 23
+#define TRIG_PIN_1 34
+#define ECHO_PIN_1 35
+#define TRIG_PIN_2 36
+#define ECHO_PIN_2 37
 
 // Constants
 #define SOUND_SPEED 0.034
 #define WEIGHT_THRESHOLD 50
 #define DISTANCE_THRESHOLD 10
-#define PHONE_NUMBER "+639278557480"
+String number = "+639278557480";
 
 // Global objects
 SoftwareSerial gsmSerial(GSM_RX_PIN, GSM_TX_PIN);
@@ -394,6 +394,8 @@ void startContainerMeasurement() {
     distance2 = getUltrasonicDistance(TRIG_PIN_2, ECHO_PIN_2);
     
     currentTime = millis();
+    //Serial.println(distance1);
+    //Serial.println(distance2);
     
     // Process container 1 status
     if (isValidReading(distance1)) {
@@ -417,6 +419,8 @@ void startContainerMeasurement() {
         Serial.print("Container #1 is ");
         Serial.print(fillPercentage1, 1);
         Serial.println("% full.");
+        String message = "Container #1 is " + String(fillPercentage1) + "% full -RVM-Kun";
+        sendSMS(message);
       }
     }
     
@@ -442,6 +446,8 @@ void startContainerMeasurement() {
         Serial.print("Container #2 is ");
         Serial.print(fillPercentage2, 1);
         Serial.println("% full.");
+        String message = "Container #2 is " + String(fillPercentage2) + "% full -RVM-Kun";
+        sendSMS(message);
       }
     }
     
@@ -492,36 +498,29 @@ bool isValidReading(float distance) {
 }
 
 void sendSMS(String message) {
-  Serial.println("INFO: Sending SMS...");
-  
-  gsmSerial.println("AT");
-  delay(500);
-  _buffer = readGSMResponse();
-  Serial.println("GSM Response to AT: " + _buffer);
-  
-  gsmSerial.println("AT+CMGF=1");
-  delay(500);
-  _buffer = readGSMResponse();
-  Serial.println("GSM Response to CMGF: " + _buffer);
-  
-  gsmSerial.print("AT+CMGS=\"");
-  gsmSerial.print(PHONE_NUMBER);
-  gsmSerial.println("\"\r");
-  delay(1000);
-  _buffer = readGSMResponse();
-  
-  gsmSerial.print(message);
-  delay(500);
-  
-  gsmSerial.write(26);  // ASCII code for Ctrl+Z
-  delay(5000);
-  
-  _buffer = readGSMResponse();
-  
-  if (_buffer.indexOf("OK") != -1 || _buffer.indexOf("+CMGS") != -1) {
-    Serial.println("INFO: SMS Sent successfully!");
-  } else {
-    Serial.println("WARNING: SMS may not have been sent. GSM Response: " + _buffer);
+  //Serial.println ("Sending Message");
+  gsmSerial.println("AT+CMGF=1");    //Sets the GSM Module in Text Mode
+  delay(200);
+  //Serial.println ("Set SMS Number");
+  gsmSerial.println("AT+CMGS=\"" + number + "\"\r"); //Mobile phone number to send message
+  delay(200);
+  gsmSerial.println(message);
+  delay(100);
+  gsmSerial.println((char)26);// ASCII code of CTRL+Z
+  delay(200);
+  _buffer = _readSerial();
+  Serial.println("Sent na dapat waitings nalang");
+}
+
+String _readSerial() {
+  _timeout = 0;
+  while  (!gsmSerial.available() && _timeout < 12000  )
+  {
+    delay(13);
+    _timeout++;
+  }
+  if (gsmSerial.available()) {
+    return gsmSerial.readString();
   }
 }
 

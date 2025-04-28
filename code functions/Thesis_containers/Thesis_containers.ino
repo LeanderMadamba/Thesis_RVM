@@ -11,12 +11,12 @@
  */
 
 // Pin definitions for Container 1 Sensor
-const int trigPin1 = 22;
-const int echoPin1 = 23;
+const int trigPin1 = 34;
+const int echoPin1 = 35;
 
 // Pin definitions for Container 2 Sensor
-const int trigPin2 = 24;
-const int echoPin2 = 25;
+const int trigPin2 = 36;
+const int echoPin2 = 37;
 
 // Container parameters (in centimeters)
 const float container1Height = 90.0;  // Container 1 height
@@ -94,8 +94,10 @@ void startContainerMeasurement() {
   while ((millis() - startTime) < totalMeasurementTime) {
     // Get readings from both sensors
     distance1 = getUltrasonicDistance(trigPin1, echoPin1);
+    Serial.println("distance1 :" + String(distance1));
     delay(50); // Small delay between sensor readings
     distance2 = getUltrasonicDistance(trigPin2, echoPin2);
+    Serial.println("distance2 :" + String(distance2));
     
     currentTime = millis();
     
