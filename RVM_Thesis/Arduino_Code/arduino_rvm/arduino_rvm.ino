@@ -197,19 +197,6 @@ void processCommand(String command) {
     startContainerMeasurement();
     Serial.println("READY: Container check complete");
   }
-  else if (command == "MOTOR_TEST") {
-    Serial.println("INFO: Running DC motor test...");
-    testDcMotor();
-    Serial.println("READY: DC motor test complete");
-  }
-  else if (command == "WEIGHT_TEST") {
-    Serial.println("INFO: Running weight measurement test...");
-    float weight = measureWeight();
-    Serial.print("Weight measurement: ");
-    Serial.print(weight);
-    Serial.println(" g");
-    Serial.println("READY: Weight test complete");
-  }
   else {
     Serial.print("ERROR: Unknown command: ");
     Serial.println(command);
@@ -328,41 +315,6 @@ void activateDcMotor() {
   
   Serial.println("INFO: DC motor operation complete");
 }
-
-void testDcMotor() {
-  Serial.println("Running motor forward at increasing speed...");
-  digitalWrite(MOTOR_IN1, HIGH);
-  digitalWrite(MOTOR_IN2, LOW);
-  
-  for (int speed = 50; speed <= 255; speed += 51) {
-    Serial.print("Speed: ");
-    Serial.println(speed);
-    analogWrite(MOTOR_ENA, speed);
-    delay(1000);
-  }
-  
-  Serial.println("Stopping motor...");
-  analogWrite(MOTOR_ENA, 0);
-  delay(1000);
-  
-  Serial.println("Running motor backward at increasing speed...");
-  digitalWrite(MOTOR_IN1, LOW);
-  digitalWrite(MOTOR_IN2, HIGH);
-  
-  for (int speed = 50; speed <= 255; speed += 51) {
-    Serial.print("Speed: ");
-    Serial.println(speed);
-    analogWrite(MOTOR_ENA, speed);
-    delay(1000);
-  }
-  
-  Serial.println("Stopping motor...");
-  analogWrite(MOTOR_ENA, 0);
-  digitalWrite(MOTOR_IN1, LOW);
-  digitalWrite(MOTOR_IN2, LOW);
-  delay(1000);
-}
-
 
 // Integrated from Thesis_containers.ino
 void startContainerMeasurement() {
@@ -522,18 +474,6 @@ String _readSerial() {
   if (gsmSerial.available()) {
     return gsmSerial.readString();
   }
-}
-
-String readGSMResponse() {
-  _timeout = 0;
-  while (!gsmSerial.available() && _timeout < 12000) {
-    delay(13);
-    _timeout++;
-  }
-  if (gsmSerial.available()) {
-    return gsmSerial.readString();
-  }
-  return "";
 }
 
 void stopAllMotors() {

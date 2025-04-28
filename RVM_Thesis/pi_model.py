@@ -31,14 +31,7 @@ import serial.tools.list_ports
 
 # GPIO setup
 BUTTON_PIN = 17  # Button for user input
-SERVO_PIN = 18   # GPIO pin for MG995 servo control
 
-# Servo configuration
-SERVO_FREQ = 50  # Standard servo PWM frequency (50Hz)
-SERVO_STOP = 7.5  # Stop position (1.5ms pulse)
-SERVO_CW = 10.0   # Clockwise rotation (2.0ms pulse)
-SERVO_CCW = 5.0   # Counter-clockwise rotation (1.0ms pulse)
-SERVO_RUNTIME = 3.0  # How long to run servo when activated (seconds)
 
 # Serial communication setup
 BAUD_RATE = 9600
@@ -66,7 +59,7 @@ arduino_ready = False
 arduino_processing = False  # New flag to track if Arduino is actively processing
 serial_lock = threading.Lock()
 last_command_time = 0  # Track when the last command was sent
-servo_pwm = None  # Global PWM object for servo control
+
 
 def find_arduino_port():
     """
@@ -208,20 +201,14 @@ def serial_reader_thread():
             time.sleep(1)
 
 def initialize_hardware():
-    """Initialize camera, LCD, GPIO, serial, servo, and model"""
-    global ser, arduino_ready, servo_pwm
+    """Initialize camera, LCD, GPIO, serial, and model"""
+    global ser, arduino_ready
     
     print("Initializing hardware...")
     
     # Set up GPIO
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    
-    # Set up servo
-    GPIO.setup(SERVO_PIN, GPIO.OUT)
-    servo_pwm = GPIO.PWM(SERVO_PIN, SERVO_FREQ)
-    servo_pwm.start(SERVO_STOP)  # Start with servo stopped
-    print(f"Servo initialized on pin {SERVO_PIN}")
     
     # Auto-detect Arduino
     arduino_port = find_arduino_port()
@@ -242,7 +229,7 @@ def initialize_hardware():
                 ser.write(b"HELLO\n")
             
             # Wait for initial ready signal
-            timeout = 10
+            timeout = 30
             start_time = time.time()
             while not arduino_ready:
                 if time.time() - start_time > timeout:
@@ -303,7 +290,7 @@ def initialize_hardware():
 
 def cleanup(picam2, lcd):
     """Clean up resources"""
-    global servo_pwm
+    global ser
     
     if picam2:
         picam2.stop()
@@ -319,10 +306,6 @@ def cleanup(picam2, lcd):
         with serial_lock:
             ser.write(b"SHUTDOWN\n")
             ser.close()
-    
-    # Cleanup servo
-    if servo_pwm:
-        servo_pwm.stop()
     
     GPIO.cleanup()
     print("Cleanup complete")
@@ -394,33 +377,6 @@ def wait_for_arduino_ready():
     
     print("Arduino is ready for next item")
 
-def control_servo_for_waste():
-    """Control servo to rotate 360 degrees when waste is detected"""
-    global servo_pwm
-    
-    if not servo_pwm:
-        print("Servo not initialized")
-        return
-    
-    try:
-        print("Activating servo for waste handling...")
-        
-        # Start rotating clockwise (adjust direction as needed)
-        servo_pwm.ChangeDutyCycle(SERVO_CW)
-        
-        # Run for specified time
-        time.sleep(SERVO_RUNTIME)
-        
-        # Stop servo
-        servo_pwm.ChangeDutyCycle(SERVO_STOP)
-        print("Servo rotation complete")
-        
-    except Exception as e:
-        print(f"Error controlling servo: {e}")
-        # Make sure to stop servo in case of error
-        if servo_pwm:
-            servo_pwm.ChangeDutyCycle(SERVO_STOP)
-
 def check_container_fullness():
     """Request Arduino to check if containers are full"""
     if not ser:
@@ -441,74 +397,6 @@ def check_container_fullness():
         print("Arduino busy. Cannot check containers now.")
         return False
 
-def test_dc_motor():
-    """Test the DC motor"""
-    if not ser:
-        print("Serial connection not available. Cannot test motor.")
-        return False
-    
-    if arduino_ready:
-        arduino_ready = False  # Mark as busy
-        arduino_processing = True  # Mark as processing
-        
-        # Send motor test command
-        send_command_to_arduino("MOTOR_TEST")
-        
-        # Wait for Arduino to complete the test
-        wait_for_arduino_ready()
-        return True
-    else:
-        print("Arduino busy. Cannot test motor now.")
-        return False
-
-def test_weight_sensor():
-    """Test the load cell weight sensor"""
-    if not ser:
-        print("Serial connection not available. Cannot test weight sensor.")
-        return False
-    
-    if arduino_ready:
-        arduino_ready = False  # Mark as busy
-        arduino_processing = True  # Mark as processing
-        
-        # Send weight test command
-        send_command_to_arduino("WEIGHT_TEST")
-        
-        # Wait for Arduino to complete the test
-        wait_for_arduino_ready()
-        return True
-    else:
-        print("Arduino busy. Cannot test weight sensor now.")
-        return False
-
-def system_diagnostic():
-    """Run diagnostic tests on all hardware components"""
-    print("Starting system diagnostic...")
-    
-    if not ser:
-        print("Arduino not connected. Cannot run full diagnostics.")
-        return
-    
-    # Check Arduino status
-    check_arduino_status()
-    
-    # Test DC motor
-    if arduino_ready:
-        print("Testing DC motor...")
-        test_dc_motor()
-    
-    # Test weight sensor
-    if arduino_ready:
-        print("Testing weight sensor...")
-        test_weight_sensor()
-    
-    # Check container fullness
-    if arduino_ready:
-        print("Checking container fullness...")
-        check_container_fullness()
-    
-    print("System diagnostic complete")
-
 def main():
     global arduino_ready, arduino_processing
     
@@ -528,7 +416,6 @@ def main():
         arduino_ready = True
     
     status_check_time = time.time()
-    container_check_time = time.time()
     
     try:
         while True:
@@ -590,15 +477,6 @@ def main():
                             lcd.cursor_pos = (3, 0)
                             lcd.write_string("Low conf - reclassed")
                     
-                    # Handle waste detection with servo control
-                    if not is_plastic:  # If it's waste (either original or reclassified)
-                        if lcd and not reclassified:  # Only write this if we didn't write reclassification message
-                            lcd.cursor_pos = (3, 0)
-                            lcd.write_string("Moving waste bin...")
-                        
-                        # Activate the servo for waste handling
-                        control_servo_for_waste()
-                    
                     # Only send to Arduino if we have a connection
                     if ser:
                         if lcd:
@@ -646,13 +524,6 @@ def main():
                         check_arduino_status()
                     
                     status_check_time = current_time
-            
-            # Check container fullness every hour
-            current_time = time.time()
-            if ser and arduino_ready and current_time - container_check_time > 3600:  # Every hour
-                print("Performing routine container fullness check...")
-                check_container_fullness()
-                container_check_time = current_time
             
             time.sleep(0.1)  # Reduce CPU usage
             
