@@ -15,14 +15,14 @@
  * - 10kg Load Cell with HX711 Amplifier
  */
 
-#include <SoftwareSerial.h>
+//#include <SoftwareSerial.h>
 #include <Servo.h>
 #include "HX711.h"
 
 // Pin Definitions
 // SIM800L GSM Module
-#define GSM_RX_PIN 19
-#define GSM_TX_PIN 18
+//#define GSM_RX_PIN 19
+//#define GSM_TX_PIN 18
 
 // Servo Motors
 #define SERVO_360_PIN 9
@@ -51,7 +51,7 @@
 String number = "+639278557480";
 
 // Global objects
-SoftwareSerial gsmSerial(GSM_RX_PIN, GSM_TX_PIN);
+//SoftwareSerial gsmSerial(GSM_RX_PIN, GSM_TX_PIN);
 Servo servo360;
 Servo servo160;
 HX711 scale;
@@ -74,7 +74,7 @@ const unsigned long verificationTime = 10000;     // 10 seconds verification for
 
 void setup() {
   Serial.begin(9600);
-  gsmSerial.begin(9600);
+  Serial1.begin(9600);
   
   // Initialize DC Motor pins
   pinMode(MOTOR_ENA, OUTPUT);
@@ -451,14 +451,14 @@ bool isValidReading(float distance) {
 
 void sendSMS(String message) {
   //Serial.println ("Sending Message");
-  gsmSerial.println("AT+CMGF=1");    //Sets the GSM Module in Text Mode
+  Serial1.println("AT+CMGF=1");    //Sets the GSM Module in Text Mode
   delay(200);
   //Serial.println ("Set SMS Number");
-  gsmSerial.println("AT+CMGS=\"" + number + "\"\r"); //Mobile phone number to send message
+  Serial1.println("AT+CMGS=\"" + number + "\"\r"); //Mobile phone number to send message
   delay(200);
-  gsmSerial.println(message);
+  Serial1.println(message);
   delay(100);
-  gsmSerial.println((char)26);// ASCII code of CTRL+Z
+  Serial1.println((char)26);// ASCII code of CTRL+Z
   delay(200);
   _buffer = _readSerial();
   Serial.println("Sent na dapat waitings nalang");
@@ -466,13 +466,13 @@ void sendSMS(String message) {
 
 String _readSerial() {
   _timeout = 0;
-  while  (!gsmSerial.available() && _timeout < 12000  )
+  while  (!Serial1.available() && _timeout < 12000  )
   {
     delay(13);
     _timeout++;
   }
-  if (gsmSerial.available()) {
-    return gsmSerial.readString();
+  if (Serial1.available()) {
+    return Serial1.readString();
   }
 }
 
