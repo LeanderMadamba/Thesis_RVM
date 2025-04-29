@@ -12,7 +12,11 @@
 ---
 
 **Pending Tasks:**
-- [ ] Fix Accuracy and Confidence Level
-- [ ] Fix Load cell readings / load cell wirings
-- [ ] Fix Ultrasonic Readings
-- [ ] Catfood dispensing system
+- [X] Fix Accuracy and Confidence Level
+- [X] Fix Load cell readings / load cell wirings
+- [X] Fix Ultrasonic Readings
+- [X] Catfood dispensing system
+- [ ] LCD Verbiage
+- [ ] Load cell disregard negative values
+- [ ] 5 bottle credit system
+      
