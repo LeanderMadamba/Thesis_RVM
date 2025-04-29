@@ -173,7 +173,7 @@ def preprocess_image(image, target_size=(224, 224)):
     return img
 
 def parse_arduino_response(line):
-    """Parse Arduino response to extract information including credit count"""
+    """Parse Arduino response to extract information including credit count and weight"""
     global plastic_credits
     
     if "INFO: Plastic credits: " in line:
@@ -185,6 +185,19 @@ def parse_arduino_response(line):
             print(f"Updated credit count from Arduino: {plastic_credits}")
         except (ValueError, IndexError) as e:
             print(f"Error parsing credit info: {e}")
+    
+    # Track if an item was reclassified due to weight
+    if "INFO: Measured weight: " in line and "g" in line:
+        try:
+            # Extract weight value
+            weight_text = line.split("INFO: Measured weight: ")[1]
+            weight = float(weight_text.split(" g")[0])
+            print(f"Detected weight from Arduino: {weight}g")
+            return weight  # Return the weight for processing
+        except (ValueError, IndexError) as e:
+            print(f"Error parsing weight info: {e}")
+    
+    return None  # Return None if no weight was parsed
 
 def serial_reader_thread():
     """Background thread to continuously read from Arduino"""
@@ -446,6 +459,7 @@ def main():
         arduino_ready = True
     
     status_check_time = time.time()
+    weight_measurement = None  # Track weight measurement for reclassification
     
     try:
         while True:
@@ -458,6 +472,9 @@ def main():
                         lcd.write_string("Capturing image...")
                     
                     print("Button pressed. Capturing image...")
+                    
+                    # Reset weight measurement for new detection
+                    weight_measurement = None
                     
                     # Capture image
                     image = picam2.capture_array()
@@ -483,9 +500,12 @@ def main():
                     
                     # If it's predicted as plastic but has low confidence, treat as waste
                     reclassified = False
+                    reclassification_reason = ""
+                    
                     if is_plastic and confidence < PLASTIC_CONFIDENCE_THRESHOLD:
                         is_plastic = False  # Change to waste
                         reclassified = True
+                        reclassification_reason = "low confidence"
                         print(f"Low confidence plastic detection ({confidence:.2f}), reclassifying as waste")
                     
                     # Final class name after potential reclassification
@@ -494,7 +514,7 @@ def main():
                     # Display result with additional info about reclassification if needed
                     print(f"Prediction: {class_name} (Confidence: {confidence:.2f})")
                     if reclassified:
-                        print(f"Original prediction was {base_class_name} but reclassified due to low confidence")
+                        print(f"Original prediction was {base_class_name} but reclassified due to {reclassification_reason}")
                     
                     if lcd:
                         lcd.clear()
@@ -506,10 +526,6 @@ def main():
                         
                         # Update credit display
                         update_lcd_credit_display(lcd)
-                        
-                        if reclassified:
-                            lcd.cursor_pos = (3, 0)
-                            lcd.write_string("Low conf - reclassed")
                     
                     # Only send to Arduino if we have a connection
                     if ser:
@@ -520,10 +536,12 @@ def main():
                         # Send classification result to Arduino
                         arduino_ready = False  # Mark as busy
                         arduino_processing = True  # Mark as processing
-                        command = "PLASTIC" if is_plastic else "WASTE"
-                        send_command_to_arduino(command)
                         
-                        # Wait for the Arduino to process
+                        # Send the initial classification to Arduino
+                        initial_command = "PLASTIC" if is_plastic else "WASTE"
+                        send_command_to_arduino(initial_command)
+                        
+                        # Wait for the Arduino to process and collect weight data
                         if lcd:
                             lcd.clear()
                             lcd.write_string("Arduino processing...")
@@ -534,6 +552,45 @@ def main():
                                 new_credits = min(plastic_credits + 1, PLASTIC_CREDIT_THRESHOLD)
                                 lcd.cursor_pos = (2, 0)
                                 lcd.write_string(f"Credits: {new_credits}/{PLASTIC_CREDIT_THRESHOLD}")
+                        
+                        # Monitor Arduino responses for weight info (process asynchronously)
+                        start_time = time.time()
+                        while arduino_processing and (time.time() - start_time) < 15:  # 15 second timeout
+                            # Process any available serial data
+                            if ser and ser.is_open:
+                                with serial_lock:
+                                    if ser.in_waiting > 0:
+                                        line = ser.readline().decode('utf-8').strip()
+                                        if line:
+                                            print(f"Arduino: {line}")
+                                            
+                                            # Check for weight data
+                                            weight = parse_arduino_response(line)
+                                            if weight is not None:
+                                                weight_measurement = weight
+                                                
+                                                # If plastic item but weight exceeds threshold, reclassify on LCD
+                                                if is_plastic and weight > WEIGHT_THRESHOLD:
+                                                    print(f"Plastic item weight ({weight}g) exceeds threshold ({WEIGHT_THRESHOLD}g)")
+                                                    print("Arduino will handle as waste - updating display")
+                                                    
+                                                    # Update LCD display
+                                                    if lcd:
+                                                        lcd.clear()
+                                                        lcd.write_string("Reclassified as waste")
+                                                        lcd.cursor_pos = (1, 0)
+                                                        lcd.write_string(f"Weight: {weight}g")
+                                                        lcd.cursor_pos = (2, 0)
+                                                        lcd.write_string(f"Exceeds {WEIGHT_THRESHOLD}g limit")
+                                                        time.sleep(2)  # Show message briefly
+                                            
+                                            # Check if ready
+                                            if "READY" in line:
+                                                arduino_ready = True
+                                                arduino_processing = False
+                                                break
+                            
+                            time.sleep(0.1)  # Small delay to prevent CPU hogging
                         
                         # Wait for Arduino to signal it's ready for next item
                         wait_for_arduino_ready()
@@ -574,7 +631,7 @@ def main():
                     status_check_time = current_time
             
             time.sleep(0.1)  # Reduce CPU usage
-            
+    
     except KeyboardInterrupt:
         print("\nProgram terminated by user")
     finally:
