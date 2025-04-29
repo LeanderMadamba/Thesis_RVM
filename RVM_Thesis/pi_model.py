@@ -13,6 +13,7 @@ Controls Arduino-based hardware components for waste handling:
 - Ultrasonic sensors for container fullness detection (from Thesis_containers.ino)
 
 Modified to reclassify plastic predictions with less than 80% confidence as waste
+Added credit system - requires 5 plastic items before activating DC motor
 """
 
 import time
@@ -48,6 +49,7 @@ CATEGORIES = ["plastic", "waste"]
 
 # Classification configuration
 PLASTIC_CONFIDENCE_THRESHOLD = 0.8  # Minimum confidence needed for plastic classification
+PLASTIC_CREDIT_THRESHOLD = 5  # Number of plastics needed to activate the DC motor
 
 # Image saving configuration
 IMAGE_FOLDER = "images"  # Folder to save images
@@ -60,6 +62,8 @@ arduino_processing = False  # New flag to track if Arduino is actively processin
 serial_lock = threading.Lock()
 last_command_time = 0  # Track when the last command was sent
 
+# Credit system
+plastic_credits = 0  # Current number of plastic credits
 
 def find_arduino_port():
     """
@@ -168,9 +172,23 @@ def preprocess_image(image, target_size=(224, 224)):
     
     return img
 
+def parse_arduino_response(line):
+    """Parse Arduino response to extract information including credit count"""
+    global plastic_credits
+    
+    if "INFO: Plastic credits: " in line:
+        try:
+            # Extract the current credit count
+            credit_info = line.split("INFO: Plastic credits: ")[1]
+            current_credits = int(credit_info.split("/")[0])
+            plastic_credits = current_credits
+            print(f"Updated credit count from Arduino: {plastic_credits}")
+        except (ValueError, IndexError) as e:
+            print(f"Error parsing credit info: {e}")
+
 def serial_reader_thread():
     """Background thread to continuously read from Arduino"""
-    global arduino_ready, arduino_processing, ser
+    global arduino_ready, arduino_processing, ser, plastic_credits
     
     print("Serial reader thread started")
     
@@ -195,6 +213,9 @@ def serial_reader_thread():
                                 if arduino_processing and not arduino_ready:
                                     print("Arduino reported an error, resetting processing state")
                                     arduino_processing = False
+                            
+                            # Parse for credit information
+                            parse_arduino_response(line)
             time.sleep(0.1)
         except Exception as e:
             print(f"Serial reader error: {e}")
@@ -202,7 +223,7 @@ def serial_reader_thread():
 
 def initialize_hardware():
     """Initialize camera, LCD, GPIO, serial, and model"""
-    global ser, arduino_ready
+    global ser, arduino_ready, plastic_credits
     
     print("Initializing hardware...")
     
@@ -260,10 +281,13 @@ def initialize_hardware():
         lcd.cursor_pos = (2, 0)
         lcd.write_string("classify an item")
         
-        # Show Arduino status
+        # Initialize credits
+        plastic_credits = 0
+        
+        # Show Arduino status and credits
         lcd.cursor_pos = (3, 0)
         if ser:
-            lcd.write_string(f"Arduino: {arduino_port}")
+            lcd.write_string(f"Credits:0/{PLASTIC_CREDIT_THRESHOLD}")
         else:
             lcd.write_string("Arduino: Not found")
             
@@ -397,8 +421,14 @@ def check_container_fullness():
         print("Arduino busy. Cannot check containers now.")
         return False
 
+def update_lcd_credit_display(lcd):
+    """Update the credits display on the LCD"""
+    if lcd:
+        lcd.cursor_pos = (3, 0)
+        lcd.write_string(f"Credits:{plastic_credits}/{PLASTIC_CREDIT_THRESHOLD}   ")  # Extra spaces to clear line
+
 def main():
-    global arduino_ready, arduino_processing
+    global arduino_ready, arduino_processing, plastic_credits
     
     # Initialize hardware
     picam2, lcd, model = initialize_hardware()
@@ -473,6 +503,10 @@ def main():
                         lcd.write_string(f"Confidence: {confidence:.2f}")
                         lcd.cursor_pos = (2, 0)
                         lcd.write_string(f"Saved: {os.path.basename(saved_path)}")
+                        
+                        # Update credit display
+                        update_lcd_credit_display(lcd)
+                        
                         if reclassified:
                             lcd.cursor_pos = (3, 0)
                             lcd.write_string("Low conf - reclassed")
@@ -495,15 +529,26 @@ def main():
                             lcd.write_string("Arduino processing...")
                             lcd.cursor_pos = (1, 0)
                             lcd.write_string("Please wait...")
+                            if is_plastic:
+                                # Update predicted credit count before Arduino confirms
+                                new_credits = min(plastic_credits + 1, PLASTIC_CREDIT_THRESHOLD)
+                                lcd.cursor_pos = (2, 0)
+                                lcd.write_string(f"Credits: {new_credits}/{PLASTIC_CREDIT_THRESHOLD}")
                         
                         # Wait for Arduino to signal it's ready for next item
                         wait_for_arduino_ready()
+                        
+                        # Update LCD with actual credit count from Arduino
+                        if lcd:
+                            update_lcd_credit_display(lcd)
                     
                     if lcd:
                         lcd.clear()
                         lcd.write_string("Ready for next item")
                         lcd.cursor_pos = (1, 0)
                         lcd.write_string("Press button again..")
+                        # Display credit status
+                        update_lcd_credit_display(lcd)
                         print("Ready for next item..")
                     
                     # Wait for button release with debounce
@@ -519,6 +564,8 @@ def main():
                         lcd.write_string("Waiting for Arduino")
                         lcd.cursor_pos = (1, 0)
                         lcd.write_string("to be ready...")
+                        # Display credit status
+                        update_lcd_credit_display(lcd)
                     
                     # Only check status if not processing
                     if not arduino_processing:

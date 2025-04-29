@@ -39,7 +39,7 @@
 // Load Cell
 #define LOADCELL_DOUT_PIN 3
 #define LOADCELL_SCK_PIN 2
-#define CALIBRATION_FACTOR 347.21  // Updated calibration value based on the example
+#define CALIBRATION_FACTOR 100    // Updated calibration value based on the example
 
 // Ultrasonic Sensors
 #define TRIG_PIN_1 34
@@ -51,6 +51,7 @@
 #define SOUND_SPEED 0.034
 #define WEIGHT_THRESHOLD 50
 #define DISTANCE_THRESHOLD 10
+#define PLASTIC_CREDIT_THRESHOLD 5 // Number of plastic items needed to activate DC motor
 String number = "+639278557480";
 
 // Global objects
@@ -68,6 +69,7 @@ bool systemBusy = false;
 bool obstructionDetected = false;
 String inputBuffer = "";
 bool inputComplete = false;
+int plasticCredits = 0; // Counter for plastic items
 
 // Container parameters for ultrasonic sensors
 const float container1Height = 90.0;
@@ -124,24 +126,21 @@ void setup() {
     Serial.println("Load cell initialized and tared successfully");
   }
   
+  // Reset plastic credits
+  plasticCredits = 0;
+  
   systemBusy = false;
   Serial.println("READY: RVM Controller ready for commands");
 }
 
 void loop() {
-  // Debug raw weight reading
-  if (loadCell.update()) {
-    Serial.print("DEBUG - Raw Load Cell: ");
-    Serial.print(loadCell.getData());
-    Serial.println(" g");
-  }
-  
+  // Remove debug raw weight reading
   checkSerialCommands();
   
   // Keep the load cell updated
   loadCell.update();
   
-  delay(500); // Increased delay to reduce the amount of debug output
+  delay(10); // Return to original delay
 }
 
 void checkSerialCommands() {
@@ -175,6 +174,10 @@ void processCommand(String command) {
       Serial.println("BUSY: System is currently processing");
     } else {
       Serial.println("READY: System is ready for next command");
+      Serial.print("INFO: Plastic credits: ");
+      Serial.print(plasticCredits);
+      Serial.print("/");
+      Serial.println(PLASTIC_CREDIT_THRESHOLD);
     }
   }
   else if (command == "PLASTIC" && !systemBusy) {
@@ -190,6 +193,10 @@ void processCommand(String command) {
     processWasteItem();
     systemBusy = false;
     Serial.println("READY: Waste processing complete");
+  }
+  else if (command == "RESET_CREDITS") {
+    plasticCredits = 0;
+    Serial.println("INFO: Plastic credits reset to 0");
   }
   else if (command == "SHUTDOWN") {
     Serial.println("INFO: Shutting down...");
@@ -212,6 +219,13 @@ void processPlasticItem() {
   Serial.print(weight);
   Serial.println(" g");
   
+  // Increment plastic credits
+  plasticCredits++;
+  Serial.print("INFO: Plastic credits: ");
+  Serial.print(plasticCredits);
+  Serial.print("/");
+  Serial.println(PLASTIC_CREDIT_THRESHOLD);
+  
   if (weight > WEIGHT_THRESHOLD) {
     activateServo360();
   } else {
@@ -221,8 +235,18 @@ void processPlasticItem() {
   Serial.println("Checking for fullness of containers...");
   startContainerMeasurement();
   
-  activateDcMotor();
-  
+  // Only activate DC motor if we've reached the credit threshold
+  if (plasticCredits >= PLASTIC_CREDIT_THRESHOLD) {
+    Serial.println("INFO: Credit threshold reached, activating DC motor");
+    activateDcMotor();
+    // Reset credits after DC motor activation
+    plasticCredits = 0;
+    Serial.println("INFO: Credits reset to 0");
+  } else {
+    Serial.print("INFO: Need ");
+    Serial.print(PLASTIC_CREDIT_THRESHOLD - plasticCredits);
+    Serial.println(" more plastic item(s) to activate DC motor");
+  }
 }
 
 void processWasteItem() {
@@ -233,8 +257,12 @@ void processWasteItem() {
   Serial.println("Checking for fullness of containers...");
   startContainerMeasurement();
   
-  //activateDcMotor();
-  
+  // No motor activation for waste items and no credit changes
+  Serial.println("INFO: Waste item does not affect credit count");
+  Serial.print("INFO: Current plastic credits: ");
+  Serial.print(plasticCredits);
+  Serial.print("/");
+  Serial.println(PLASTIC_CREDIT_THRESHOLD);
 }
 
 float measureWeight() {
@@ -249,7 +277,7 @@ float measureWeight() {
   const unsigned long timeout = 5000; // 5 second timeout
   
   // Wait for stable readings
-  Serial.println("Waiting for stable weight readings...");
+  // Remove detailed message
   delay(500); // Brief delay for object to settle
   
   // Take multiple readings and average them
@@ -263,15 +291,17 @@ float measureWeight() {
     if (newDataReady) {
       float currentReading = loadCell.getData();
       
+      // Handle negative values - either abs() or set to 0
+      if (currentReading < 0) {
+        currentReading = 0; // Option 1: Set negative values to zero
+        // currentReading = abs(currentReading); // Option 2: Use absolute value
+      }
+      
       // Check if reading is within reasonable range
       if (currentReading >= 0 && currentReading < 2000) {
         finalWeight += currentReading;
         validReadings++;
-        Serial.print("Reading #");
-        Serial.print(validReadings);
-        Serial.print(": ");
-        Serial.print(currentReading);
-        Serial.println(" g");
+        // Remove individual reading output
       }
       
       newDataReady = false;
@@ -283,25 +313,15 @@ float measureWeight() {
   if (validReadings > 0) {
     finalWeight = finalWeight / validReadings;
     
-    // Print final weight with prominent formatting for easy visibility
-    Serial.println("----------------------------------------");
-    Serial.print("FINAL WEIGHT: ");
+    // Only print the final weight, remove all other debug info
+    Serial.print("WEIGHT: ");
     Serial.print(finalWeight);
     Serial.println(" g");
-    Serial.print("Valid readings: ");
-    Serial.print(validReadings);
-    Serial.print("/");
-    Serial.println(numReadings);
-    Serial.print("Measurement time: ");
-    Serial.print((millis() - startTime));
-    Serial.println(" ms");
-    Serial.println("----------------------------------------");
     
     return finalWeight;
   } else {
-    Serial.println("----------------------------------------");
-    Serial.println("WARNING: No valid weight readings obtained");
-    Serial.println("----------------------------------------");
+    // Simplified error message
+    Serial.println("ERROR: No valid weight readings");
     return 0.0;
   }
 }
