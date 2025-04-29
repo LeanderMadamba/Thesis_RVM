@@ -17,7 +17,10 @@
 
 //#include <SoftwareSerial.h>
 #include <Servo.h>
-#include "HX711.h"
+#include <HX711_ADC.h>
+#if defined(ESP8266)|| defined(ESP32) || defined(AVR)
+#include <EEPROM.h>
+#endif
 
 // Pin Definitions
 // SIM800L GSM Module
@@ -36,7 +39,7 @@
 // Load Cell
 #define LOADCELL_DOUT_PIN 3
 #define LOADCELL_SCK_PIN 2
-#define CALIBRATION_FACTOR 750
+#define CALIBRATION_FACTOR 347.21  // Updated calibration value based on the example
 
 // Ultrasonic Sensors
 #define TRIG_PIN_1 34
@@ -54,7 +57,7 @@ String number = "+639278557480";
 //SoftwareSerial gsmSerial(GSM_RX_PIN, GSM_TX_PIN);
 Servo servo360;
 Servo servo160;
-HX711 scale;
+HX711_ADC loadCell(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN); // Create HX711_ADC instance instead of HX711
 
 // GSM variables
 int _timeout;
@@ -105,29 +108,20 @@ void setup() {
   
   // Initialize load cell
   Serial.println("Initializing load cell...");
-  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
-  scale.power_down();
-  delay(500);
-  scale.power_up();
+  loadCell.begin();
   
-  if (scale.is_ready()) {
-    scale.set_scale(CALIBRATION_FACTOR);
-    Serial.println("Taring load cell (remove any weight now)...");
-    scale.tare();
-    delay(1000);
-    scale.tare(); // Second tare for stability
-    delay(1000);
-    Serial.println("Load cell initialized and tared");
-    
-    float test_reading = scale.get_units(5);
-    Serial.print("Initial reading after tare: ");
-    Serial.println(test_reading);
-    
-    if (abs(test_reading) > 1.0) {
-      Serial.println("WARNING: Load cell may not be properly calibrated");
-    }
+  // Set calibration value
+  float calibrationValue = CALIBRATION_FACTOR; 
+  unsigned long stabilizingtime = 2000; // precision right after power-up can be improved by adding a few seconds of stabilizing time
+  boolean _tare = true; // set this to false if you don't want tare to be performed in the next step
+  
+  loadCell.start(stabilizingtime, _tare);
+  
+  if (loadCell.getTareTimeoutFlag()) {
+    Serial.println("ERROR: Load cell timeout, check wiring and pin designations");
   } else {
-    Serial.println("Load cell not found. Check wiring!");
+    loadCell.setCalFactor(calibrationValue); // set calibration value (float)
+    Serial.println("Load cell initialized and tared successfully");
   }
   
   systemBusy = false;
@@ -135,10 +129,19 @@ void setup() {
 }
 
 void loop() {
+  // Debug raw weight reading
+  if (loadCell.update()) {
+    Serial.print("DEBUG - Raw Load Cell: ");
+    Serial.print(loadCell.getData());
+    Serial.println(" g");
+  }
+  
   checkSerialCommands();
   
+  // Keep the load cell updated
+  loadCell.update();
   
-  delay(10);
+  delay(500); // Increased delay to reduce the amount of debug output
 }
 
 void checkSerialCommands() {
@@ -236,33 +239,69 @@ void processWasteItem() {
 
 float measureWeight() {
   Serial.println("INFO: Measuring weight...");
-  if (scale.is_ready()) {
-    float weight = 0;
-    int validReadings = 0;
+  
+  // Variables for weight measurement
+  static boolean newDataReady = false;
+  float finalWeight = 0.0;
+  const int numReadings = 10; // Number of readings to average
+  int validReadings = 0;
+  unsigned long startTime = millis();
+  const unsigned long timeout = 5000; // 5 second timeout
+  
+  // Wait for stable readings
+  Serial.println("Waiting for stable weight readings...");
+  delay(500); // Brief delay for object to settle
+  
+  // Take multiple readings and average them
+  while (validReadings < numReadings && (millis() - startTime) < timeout) {
+    // Check if new data is available from the load cell
+    if (loadCell.update()) {
+      newDataReady = true;
+    }
     
-    for (int i = 0; i < 5; i++) {
-      float reading = scale.get_units();
-      if (reading >= 0 && reading < 1000) {
-        weight += reading;
+    // If we have new data, process it
+    if (newDataReady) {
+      float currentReading = loadCell.getData();
+      
+      // Check if reading is within reasonable range
+      if (currentReading >= 0 && currentReading < 2000) {
+        finalWeight += currentReading;
         validReadings++;
+        Serial.print("Reading #");
+        Serial.print(validReadings);
+        Serial.print(": ");
+        Serial.print(currentReading);
+        Serial.println(" g");
       }
-      delay(100);
+      
+      newDataReady = false;
+      delay(50); // Small delay between readings
     }
+  }
+  
+  // If we got valid readings, calculate the average
+  if (validReadings > 0) {
+    finalWeight = finalWeight / validReadings;
     
-    if (validReadings > 0) {
-      weight = weight / validReadings;
-    } else {
-      weight = 0;
-    }
+    // Print final weight with prominent formatting for easy visibility
+    Serial.println("----------------------------------------");
+    Serial.print("FINAL WEIGHT: ");
+    Serial.print(finalWeight);
+    Serial.println(" g");
+    Serial.print("Valid readings: ");
+    Serial.print(validReadings);
+    Serial.print("/");
+    Serial.println(numReadings);
+    Serial.print("Measurement time: ");
+    Serial.print((millis() - startTime));
+    Serial.println(" ms");
+    Serial.println("----------------------------------------");
     
-    weight = weight * 1000.0;
-    
-    Serial.print("Raw weight value (g): ");
-    Serial.println(weight);
-    
-    return weight;
+    return finalWeight;
   } else {
-    Serial.println("ERROR: Scale not ready!");
+    Serial.println("----------------------------------------");
+    Serial.println("WARNING: No valid weight readings obtained");
+    Serial.println("----------------------------------------");
     return 0.0;
   }
 }

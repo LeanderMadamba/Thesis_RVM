@@ -504,6 +504,7 @@ def main():
                         lcd.write_string("Ready for next item")
                         lcd.cursor_pos = (1, 0)
                         lcd.write_string("Press button again..")
+                        print("Ready for next item..")
                     
                     # Wait for button release with debounce
                     time.sleep(0.5)
