@@ -50,6 +50,7 @@ CATEGORIES = ["plastic", "waste"]
 # Classification configuration
 PLASTIC_CONFIDENCE_THRESHOLD = 0.8  # Minimum confidence needed for plastic classification
 PLASTIC_CREDIT_THRESHOLD = 5  # Number of plastics needed to activate the DC motor
+WEIGHT_THRESHOLD = 50  # Weight threshold in grams (must match Arduino definition)
 
 # Image saving configuration
 IMAGE_FOLDER = "images"  # Folder to save images
@@ -548,10 +549,13 @@ def main():
                             lcd.cursor_pos = (1, 0)
                             lcd.write_string("Please wait...")
                             if is_plastic:
-                                # Update predicted credit count before Arduino confirms
-                                new_credits = min(plastic_credits + 1, PLASTIC_CREDIT_THRESHOLD)
+                                # Show potential credit update (tentative - depends on weight check)
+                                # Credits will only be incremented if weight is under threshold
+                                potential_credits = plastic_credits + 1
                                 lcd.cursor_pos = (2, 0)
-                                lcd.write_string(f"Credits: {new_credits}/{PLASTIC_CREDIT_THRESHOLD}")
+                                lcd.write_string(f"Potential credits: {potential_credits}/{PLASTIC_CREDIT_THRESHOLD}")
+                                lcd.cursor_pos = (3, 0)
+                                lcd.write_string("If weight is valid")
                         
                         # Monitor Arduino responses for weight info (process asynchronously)
                         start_time = time.time()
@@ -582,6 +586,8 @@ def main():
                                                         lcd.write_string(f"Weight: {weight}g")
                                                         lcd.cursor_pos = (2, 0)
                                                         lcd.write_string(f"Exceeds {WEIGHT_THRESHOLD}g limit")
+                                                        lcd.cursor_pos = (3, 0)
+                                                        lcd.write_string(f"Credits:{plastic_credits}/{PLASTIC_CREDIT_THRESHOLD}")
                                                         time.sleep(2)  # Show message briefly
                                             
                                             # Check if ready

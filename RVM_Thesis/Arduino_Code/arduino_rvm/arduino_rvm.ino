@@ -219,12 +219,20 @@ void processPlasticItem() {
   Serial.print(weight);
   Serial.println(" g");
   
-  // Increment plastic credits
-  plasticCredits++;
-  Serial.print("INFO: Plastic credits: ");
-  Serial.print(plasticCredits);
-  Serial.print("/");
-  Serial.println(PLASTIC_CREDIT_THRESHOLD);
+  // Only increment plastic credits if weight is within threshold
+  if (weight <= WEIGHT_THRESHOLD) {
+    plasticCredits++;
+    Serial.print("INFO: Plastic credits: ");
+    Serial.print(plasticCredits);
+    Serial.print("/");
+    Serial.println(PLASTIC_CREDIT_THRESHOLD);
+  } else {
+    Serial.println("INFO: Item exceeds weight threshold, no credit added");
+    Serial.print("INFO: Plastic credits remain: ");
+    Serial.print(plasticCredits);
+    Serial.print("/");
+    Serial.println(PLASTIC_CREDIT_THRESHOLD);
+  }
   
   if (weight > WEIGHT_THRESHOLD) {
     activateServo360();
