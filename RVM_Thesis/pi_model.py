@@ -470,7 +470,7 @@ def main():
                 if GPIO.input(BUTTON_PIN) == GPIO.LOW:
                     if lcd:
                         lcd.clear()
-                        lcd.write_string("Capturing image...")
+                        lcd.write_string("Processing your Item...")
                     
                     print("Button pressed. Capturing image...")
                     
@@ -545,7 +545,7 @@ def main():
                         # Wait for the Arduino to process and collect weight data
                         if lcd:
                             lcd.clear()
-                            lcd.write_string("Arduino processing...")
+                            lcd.write_string("Processing yout Item...")
                             lcd.cursor_pos = (1, 0)
                             lcd.write_string("Please wait...")
                             if is_plastic:
@@ -554,8 +554,6 @@ def main():
                                 potential_credits = plastic_credits + 1
                                 lcd.cursor_pos = (2, 0)
                                 lcd.write_string(f"Potential credits: {potential_credits}/{PLASTIC_CREDIT_THRESHOLD}")
-                                lcd.cursor_pos = (3, 0)
-                                lcd.write_string("If weight is valid")
                         
                         # Monitor Arduino responses for weight info (process asynchronously)
                         start_time = time.time()
@@ -624,9 +622,9 @@ def main():
                 if current_time - status_check_time > 5:
                     if lcd:
                         lcd.clear()
-                        lcd.write_string("Waiting for Arduino")
+                        lcd.write_string("Processing your Item...")
                         lcd.cursor_pos = (1, 0)
-                        lcd.write_string("to be ready...")
+                        lcd.write_string("Please Wait Patiently...")
                         # Display credit status
                         update_lcd_credit_display(lcd)
                     
