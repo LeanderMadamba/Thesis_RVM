@@ -1,10 +1,10 @@
 /*
  * RVM Controller - Main Script
- *
+ * 
  * Receives commands from Raspberry Pi via USB serial
  * Processes "PLASTIC" or "WASTE" commands
  * Controls servo mechanisms, DC motor, and monitors containers
- *
+ * 
  * Hardware:
  * - Arduino Mega 2560
  * - SIM800L v2 GSM Module
@@ -15,17 +15,17 @@
  * - 10kg Load Cell with HX711 Amplifier
  */
 
-// #include <SoftwareSerial.h>
+//#include <SoftwareSerial.h>
 #include <Servo.h>
 #include <HX711_ADC.h>
-#if defined(ESP8266) || defined(ESP32) || defined(AVR)
+#if defined(ESP8266)|| defined(ESP32) || defined(AVR)
 #include <EEPROM.h>
 #endif
 
 // Pin Definitions
 // SIM800L GSM Module
-// #define GSM_RX_PIN 19
-// #define GSM_TX_PIN 18
+//#define GSM_RX_PIN 19
+//#define GSM_TX_PIN 18
 
 // Servo Motors
 #define SERVO_360_PIN 9
@@ -39,7 +39,7 @@
 // Load Cell
 #define LOADCELL_DOUT_PIN 3
 #define LOADCELL_SCK_PIN 2
-#define CALIBRATION_FACTOR 100 // Updated calibration value based on the example
+#define CALIBRATION_FACTOR 100    // Updated calibration value based on the example
 
 // Ultrasonic Sensors
 #define TRIG_PIN_1 34
@@ -55,7 +55,7 @@
 String number = "+639278557480";
 
 // Global objects
-// SoftwareSerial gsmSerial(GSM_RX_PIN, GSM_TX_PIN);
+//SoftwareSerial gsmSerial(GSM_RX_PIN, GSM_TX_PIN);
 Servo servo360;
 Servo servo160;
 HX711_ADC loadCell(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN); // Create HX711_ADC instance instead of HX711
@@ -75,13 +75,12 @@ int plasticCredits = 0; // Counter for plastic items
 const float container1Height = 90.0;
 const float container2Height = 90.0;
 const unsigned long totalMeasurementTime = 10000; // 10 seconds of total measurement
-const unsigned long verificationTime = 5000;      // 5 seconds verification for fullness
+const unsigned long verificationTime = 5000;     // 5 seconds verification for fullness
 
-void setup()
-{
+void setup() {
   Serial.begin(9600);
   Serial1.begin(9600);
-
+  
   // Initialize DC Motor pins
   pinMode(MOTOR_ENA, OUTPUT);
   pinMode(MOTOR_IN1, OUTPUT);
@@ -89,7 +88,7 @@ void setup()
   digitalWrite(MOTOR_IN1, LOW);
   digitalWrite(MOTOR_IN2, LOW);
   analogWrite(MOTOR_ENA, 0);
-
+  
   // Ultrasonic sensor pins
   pinMode(TRIG_PIN_1, OUTPUT);
   pinMode(ECHO_PIN_1, INPUT);
@@ -97,99 +96,83 @@ void setup()
   pinMode(ECHO_PIN_2, INPUT);
   digitalWrite(TRIG_PIN_1, LOW);
   digitalWrite(TRIG_PIN_2, LOW);
-
+  
   // Initialize servo motors
   servo360.attach(SERVO_360_PIN);
   servo160.attach(SERVO_160_PIN);
   servo360.write(90); // Stop position
   servo160.write(90); // Center position
-
+  
   // Initialize GSM module
   _buffer.reserve(50);
   delay(3000);
   Serial.println("INFO: GSM module initialized");
-
+  
   // Initialize load cell
   Serial.println("Initializing load cell...");
   loadCell.begin();
-
+  
   // Set calibration value
-  float calibrationValue = CALIBRATION_FACTOR;
+  float calibrationValue = CALIBRATION_FACTOR; 
   unsigned long stabilizingtime = 2000; // precision right after power-up can be improved by adding a few seconds of stabilizing time
-  boolean _tare = true;                 // set this to false if you don't want tare to be performed in the next step
-
+  boolean _tare = true; // set this to false if you don't want tare to be performed in the next step
+  
   loadCell.start(stabilizingtime, _tare);
-
-  if (loadCell.getTareTimeoutFlag())
-  {
+  
+  if (loadCell.getTareTimeoutFlag()) {
     Serial.println("ERROR: Load cell timeout, check wiring and pin designations");
-  }
-  else
-  {
+  } else {
     loadCell.setCalFactor(calibrationValue); // set calibration value (float)
     Serial.println("Load cell initialized and tared successfully");
   }
-
+  
   // Reset plastic credits
   plasticCredits = 0;
-
+  
   systemBusy = false;
   Serial.println("READY: RVM Controller ready for commands");
 }
 
-void loop()
-{
+void loop() {
   // Remove debug raw weight reading
   checkSerialCommands();
-
+  
   // Keep the load cell updated
   loadCell.update();
-
+  
   delay(10); // Return to original delay
 }
 
-void checkSerialCommands()
-{
-  while (Serial.available() > 0)
-  {
+void checkSerialCommands() {
+  while (Serial.available() > 0) {
     char inChar = (char)Serial.read();
-
-    if (inChar == '\n')
-    {
+    
+    if (inChar == '\n') {
       inputComplete = true;
-    }
-    else
-    {
+    } else {
       inputBuffer += inChar;
     }
   }
-
-  if (inputComplete)
-  {
+  
+  if (inputComplete) {
     processCommand(inputBuffer);
     inputBuffer = "";
     inputComplete = false;
   }
 }
 
-void processCommand(String command)
-{
+void processCommand(String command) {
   command.trim();
   Serial.print("Processing command: ");
   Serial.println(command);
-
-  if (command == "HELLO")
-  {
+  
+  if (command == "HELLO") {
     Serial.println("READY: Hello from Arduino RVM Controller");
   }
-  else if (command == "STATUS")
-  {
-    if (systemBusy)
-    {
+  else if (command == "STATUS") {
+    if (systemBusy) {
       Serial.println("BUSY: System is currently processing");
-    }
-    else
-    {
+    } else {
       Serial.println("READY: System is ready for next command");
       Serial.print("INFO: Plastic credits: ");
       Serial.print(plasticCredits);
@@ -197,108 +180,91 @@ void processCommand(String command)
       Serial.println(PLASTIC_CREDIT_THRESHOLD);
     }
   }
-  else if (command == "PLASTIC" && !systemBusy)
-  {
+  else if (command == "PLASTIC" && !systemBusy) {
     systemBusy = true;
     Serial.println("BUSY: Processing plastic item");
     processPlasticItem();
     systemBusy = false;
     Serial.println("READY: Plastic processing complete");
   }
-  else if (command == "WASTE" && !systemBusy)
-  {
+  else if (command == "WASTE" && !systemBusy) {
     systemBusy = true;
     Serial.println("BUSY: Processing waste item");
     processWasteItem();
     systemBusy = false;
     Serial.println("READY: Waste processing complete");
   }
-  else if (command == "RESET_CREDITS")
-  {
+  else if (command == "RESET_CREDITS") {
     plasticCredits = 0;
     Serial.println("INFO: Plastic credits reset to 0");
   }
-  else if (command == "SHUTDOWN")
-  {
+  else if (command == "SHUTDOWN") {
     Serial.println("INFO: Shutting down...");
     stopAllMotors();
   }
-  else if (command == "CHECK_CONTAINERS")
-  {
+  else if (command == "CHECK_CONTAINERS") {
     Serial.println("INFO: Checking container fullness...");
     startContainerMeasurement();
     Serial.println("READY: Container check complete");
   }
-  else
-  {
+  else {
     Serial.print("ERROR: Unknown command: ");
     Serial.println(command);
   }
 }
 
-void processPlasticItem()
-{
+void processPlasticItem() {
   float weight = measureWeight();
   Serial.print("INFO: Measured weight: ");
   Serial.print(weight);
   Serial.println(" g");
-
+  
   // Only increment plastic credits if weight is within threshold
-  if (weight <= WEIGHT_THRESHOLD)
-  {
+  if (weight <= WEIGHT_THRESHOLD) {
     plasticCredits++;
     Serial.print("INFO: Plastic credits: ");
     Serial.print(plasticCredits);
     Serial.print("/");
     Serial.println(PLASTIC_CREDIT_THRESHOLD);
-  }
-  else
-  {
+  } else {
     Serial.println("INFO: Item exceeds weight threshold, no credit added");
     Serial.print("INFO: Plastic credits remain: ");
     Serial.print(plasticCredits);
     Serial.print("/");
     Serial.println(PLASTIC_CREDIT_THRESHOLD);
   }
-
-  if (weight > WEIGHT_THRESHOLD)
-  {
+  
+  if (weight > WEIGHT_THRESHOLD) {
     activateServo360();
-  }
-  else
-  {
+  } else {
     activateServo160();
   }
-
+  
   Serial.println("Checking for fullness of containers...");
   startContainerMeasurement();
-
+  
   // Only activate DC motor if we've reached the credit threshold
-  if (plasticCredits >= PLASTIC_CREDIT_THRESHOLD)
-  {
+  if (plasticCredits >= PLASTIC_CREDIT_THRESHOLD) {
     Serial.println("INFO: Credit threshold reached, activating DC motor");
     activateDcMotor();
     // Reset credits after DC motor activation
     plasticCredits = 0;
     Serial.println("INFO: Credits reset to 0");
-  }
-  else
-  {
+  } else {
     Serial.print("INFO: Need ");
     Serial.print(PLASTIC_CREDIT_THRESHOLD - plasticCredits);
     Serial.println(" more plastic item(s) to activate DC motor");
   }
 }
 
-void processWasteItem()
-{
+void processWasteItem() {
   Serial.println("INFO: Waste item detected, bypassing weight measurement");
-
+  
   activateServo360();
-
+  
   Serial.println("Checking for fullness of containers...");
   startContainerMeasurement();
-
+  
   // No motor activation for waste items and no credit changes
   Serial.println("INFO: Waste item does not affect credit count");
   Serial.print("INFO: Current plastic credits: ");
@@ -307,10 +273,9 @@ void processWasteItem()
   Serial.println(PLASTIC_CREDIT_THRESHOLD);
 }
 
-float measureWeight()
-{
+float measureWeight() {
   Serial.println("INFO: Measuring weight...");
-
+  
   // Variables for weight measurement
   static boolean newDataReady = false;
   float finalWeight = 0.0;
@@ -318,67 +283,58 @@ float measureWeight()
   int validReadings = 0;
   unsigned long startTime = millis();
   const unsigned long timeout = 5000; // 5 second timeout
-
+  
   // Wait for stable readings
   // Remove detailed message
   delay(500); // Brief delay for object to settle
-
+  
   // Take multiple readings and average them
-  while (validReadings < numReadings && (millis() - startTime) < timeout)
-  {
+  while (validReadings < numReadings && (millis() - startTime) < timeout) {
     // Check if new data is available from the load cell
-    if (loadCell.update())
-    {
+    if (loadCell.update()) {
       newDataReady = true;
     }
-
+    
     // If we have new data, process it
-    if (newDataReady)
-    {
+    if (newDataReady) {
       float currentReading = loadCell.getData();
-
+      
       // Handle negative values - either abs() or set to 0
-      if (currentReading < 0)
-      {
+      if (currentReading < 0) {
         currentReading = 0; // Option 1: Set negative values to zero
         // currentReading = abs(currentReading); // Option 2: Use absolute value
       }
-
+      
       // Check if reading is within reasonable range
-      if (currentReading >= 0 && currentReading < 2000)
-      {
+      if (currentReading >= 0 && currentReading < 2000) {
         finalWeight += currentReading;
         validReadings++;
         // Remove individual reading output
       }
-
+      
       newDataReady = false;
       delay(50); // Small delay between readings
     }
   }
-
+  
   // If we got valid readings, calculate the average
-  if (validReadings > 0)
-  {
+  if (validReadings > 0) {
     finalWeight = finalWeight / validReadings;
-
+    
     // Only print the final weight, remove all other debug info
     Serial.print("WEIGHT: ");
     Serial.print(finalWeight);
     Serial.println(" g");
-
+    
     return finalWeight;
-  }
-  else
-  {
+  } else {
     // Simplified error message
     Serial.println("ERROR: No valid weight readings");
     return 0.0;
   }
 }
 
-void activateServo360()
-{
+void activateServo360() {
   Serial.println("INFO: Activating 360-degree servo (weight > 50g)");
   servo360.write(0);
   delay(3000);
@@ -387,55 +343,48 @@ void activateServo360()
   Serial.println("INFO: 360-degree servo operation complete");
 }
 
-void activateServo160()
-{
+void activateServo160() {
   Serial.println("INFO: Activating 160-degree servo (weight <= 50g)");
-  for (int pos = 90; pos >= 10; pos -= 5)
-  {
+  for (int pos = 90; pos >= 10; pos -= 5) {
     servo160.write(pos);
     delay(50);
   }
   delay(1000);
-  for (int pos = 10; pos <= 90; pos += 5)
-  {
+  for (int pos = 10; pos <= 90; pos += 5) {
     servo160.write(pos);
     delay(50);
   }
   Serial.println("INFO: 160-degree servo operation complete");
 }
 
-void activateDcMotor()
-{
+void activateDcMotor() {
   Serial.println("INFO: Activating DC motor with L298N driver");
-
+  
   digitalWrite(MOTOR_IN1, HIGH);
   digitalWrite(MOTOR_IN2, LOW);
-
-  for (int speed = 50; speed <= 255; speed += 15)
-  {
+  
+  for (int speed = 50; speed <= 255; speed += 15) {
     analogWrite(MOTOR_ENA, speed);
     delay(100);
   }
-
+  
   analogWrite(MOTOR_ENA, 255);
   delay(3000);
-
-  for (int speed = 255; speed >= 0; speed -= 15)
-  {
+  
+  for (int speed = 255; speed >= 0; speed -= 15) {
     analogWrite(MOTOR_ENA, speed);
     delay(100);
   }
-
+  
   analogWrite(MOTOR_ENA, 0);
   digitalWrite(MOTOR_IN1, LOW);
   digitalWrite(MOTOR_IN2, LOW);
-
+  
   Serial.println("INFO: DC motor operation complete");
 }
 
 // Integrated from Thesis_containers.ino
-void startContainerMeasurement()
-{
+void startContainerMeasurement() {
   // Variables for tracking fullness status
   unsigned long container1FullStartTime = 0;
   unsigned long container2FullStartTime = 0;
@@ -443,54 +392,48 @@ void startContainerMeasurement()
   bool container2PreviouslyFull = false;
   bool container1VerifiedFull = false;
   bool container2VerifiedFull = false;
-
+  
   // Variables for measurements
   float distance1, distance2;
   float fillPercentage1, fillPercentage2;
   bool isContainer1Full = false;
   bool isContainer2Full = false;
-
+  
   // Variables for timing
   unsigned long startTime = millis();
   unsigned long currentTime;
-
+  
   Serial.println("Measuring containers for 30 seconds...");
-
+  
   // Run measurement loop for specified time
-  while ((millis() - startTime) < totalMeasurementTime)
-  {
+  while ((millis() - startTime) < totalMeasurementTime) {
     // Get readings from both sensors
     distance1 = getUltrasonicDistance(TRIG_PIN_1, ECHO_PIN_1);
     delay(50);
     distance2 = getUltrasonicDistance(TRIG_PIN_2, ECHO_PIN_2);
-
+    
     currentTime = millis();
-    // Serial.println(distance1);
-    // Serial.println(distance2);
-
+    //Serial.println(distance1);
+    //Serial.println(distance2);
+    
     // Process container 1 status
-    if (isValidReading(distance1))
-    {
+    if (isValidReading(distance1)) {
       fillPercentage1 = max(0, min(100, (container1Height - distance1) / container1Height * 100));
       isContainer1Full = (distance1 <= DISTANCE_THRESHOLD);
-
+      
       // Start or reset timer for container 1
-      if (isContainer1Full && !container1PreviouslyFull)
-      {
+      if (isContainer1Full && !container1PreviouslyFull) {
         container1FullStartTime = currentTime;
         container1PreviouslyFull = true;
-      }
-      else if (!isContainer1Full)
-      {
+      } else if (!isContainer1Full) {
         container1PreviouslyFull = false;
         container1VerifiedFull = false;
       }
-
+      
       // Check if container 1 has been full for the verification time
-      if (isContainer1Full && container1PreviouslyFull &&
-          (currentTime - container1FullStartTime >= verificationTime) &&
-          !container1VerifiedFull)
-      {
+      if (isContainer1Full && container1PreviouslyFull && 
+          (currentTime - container1FullStartTime >= verificationTime) && 
+          !container1VerifiedFull) {
         container1VerifiedFull = true;
         Serial.print("Container #1 is ");
         Serial.print(fillPercentage1, 1);
@@ -499,30 +442,25 @@ void startContainerMeasurement()
         sendSMS(message);
       }
     }
-
+    
     // Process container 2 status
-    if (isValidReading(distance2))
-    {
+    if (isValidReading(distance2)) {
       fillPercentage2 = max(0, min(100, (container2Height - distance2) / container2Height * 100));
       isContainer2Full = (distance2 <= DISTANCE_THRESHOLD);
-
+      
       // Start or reset timer for container 2
-      if (isContainer2Full && !container2PreviouslyFull)
-      {
+      if (isContainer2Full && !container2PreviouslyFull) {
         container2FullStartTime = currentTime;
         container2PreviouslyFull = true;
-      }
-      else if (!isContainer2Full)
-      {
+      } else if (!isContainer2Full) {
         container2PreviouslyFull = false;
         container2VerifiedFull = false;
       }
-
+      
       // Check if container 2 has been full for the verification time
-      if (isContainer2Full && container2PreviouslyFull &&
-          (currentTime - container2FullStartTime >= verificationTime) &&
-          !container2VerifiedFull)
-      {
+      if (isContainer2Full && container2PreviouslyFull && 
+          (currentTime - container2FullStartTime >= verificationTime) && 
+          !container2VerifiedFull) {
         container2VerifiedFull = true;
         Serial.print("Container #2 is ");
         Serial.print(fillPercentage2, 1);
@@ -531,93 +469,85 @@ void startContainerMeasurement()
         sendSMS(message);
       }
     }
-
+    
     delay(100); // Small delay for stability
   }
-
+  
   // Measurement complete
   Serial.println("Container measurement completed!");
-
+  
   // Report final status if containers weren't verified as full
-  if (!container1VerifiedFull)
-  {
+  if (!container1VerifiedFull) {
     Serial.print("Container #1 was not consistently full. Last reading: ");
     Serial.print(fillPercentage1, 1);
     Serial.println("% full.");
   }
-
-  if (!container2VerifiedFull)
-  {
+  
+  if (!container2VerifiedFull) {
     Serial.print("Container #2 was not consistently full. Last reading: ");
     Serial.print(fillPercentage2, 1);
     Serial.println("% full.");
   }
 }
 
-float getUltrasonicDistance(int trigPin, int echoPin)
-{
+float getUltrasonicDistance(int trigPin, int echoPin) {
   // Clear the trigPin
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
-
+  
   // Set the trigPin HIGH for 10 microseconds
   digitalWrite(trigPin, HIGH);
   delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
-
+  
   // Read the echoPin (returns the travel time in microseconds)
   long duration = pulseIn(echoPin, HIGH);
-
+  
   // Calculate the distance (speed of sound = 0.034 cm/microsecond)
   // Distance = (Time x Speed) / 2 (divided by 2 because sound travels to object and back)
   float distance = (duration * 0.034) / 2.0;
-
+  
   return distance;
 }
 
-bool isValidReading(float distance)
-{
+bool isValidReading(float distance) {
   // Check if reading is within reasonable bounds
   // HC-SR04 has a typical range of 2cm to 400cm
   return (distance >= 2.0 && distance <= 400.0);
 }
 
-void sendSMS(String message)
-{
-  // Serial.println ("Sending Message");
-  Serial1.println("AT+CMGF=1"); // Sets the GSM Module in Text Mode
+void sendSMS(String message) {
+  //Serial.println ("Sending Message");
+  Serial1.println("AT+CMGF=1");    //Sets the GSM Module in Text Mode
   delay(200);
-  // Serial.println ("Set SMS Number");
-  Serial1.println("AT+CMGS=\"" + number + "\"\r"); // Mobile phone number to send message
+  //Serial.println ("Set SMS Number");
+  Serial1.println("AT+CMGS=\"" + number + "\"\r"); //Mobile phone number to send message
   delay(200);
   Serial1.println(message);
   delay(100);
-  Serial1.println((char)26); // ASCII code of CTRL+Z
+  Serial1.println((char)26);// ASCII code of CTRL+Z
   delay(200);
   _buffer = _readSerial();
   Serial.println("Sent na dapat waitings nalang");
 }
 
-String _readSerial()
-{
+String _readSerial() {
   _timeout = 0;
-  while (!Serial1.available() && _timeout < 12000)
+  while  (!Serial1.available() && _timeout < 12000  )
   {
     delay(13);
     _timeout++;
   }
-  if (Serial1.available())
-  {
+  if (Serial1.available()) {
     return Serial1.readString();
   }
 }
 
-void stopAllMotors()
-{
+void stopAllMotors() {
   servo360.write(90);
   servo160.write(90);
-
+  
   analogWrite(MOTOR_ENA, 0);
   digitalWrite(MOTOR_IN1, LOW);
   digitalWrite(MOTOR_IN2, LOW);
-}
+} 
