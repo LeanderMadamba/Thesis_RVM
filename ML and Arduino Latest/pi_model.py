@@ -1,0 +1,770 @@
+#!/usr/bin/env python3
+
+"""
+RVM Model Inference Script - Serial Communication Version (Modified)
+This script loads the trained model and performs inference on images captured by the camera
+Press the button to capture and classify an image
+Results are displayed on the LCD display
+Images are saved with sequential naming in a specified folder
+Communicates with Arduino via USB Serial connection with auto-detection
+Controls Arduino-based hardware components for waste handling:
+- Load cell for weight measurement (from Load_cell_test.ino)
+- DC motor with L298N driver (from Mothafuckin_dc_motorz.ino)
+- Ultrasonic sensors for container fullness detection (from Thesis_containers.ino)
+
+Modified to reclassify plastic predictions with less than 80% confidence as waste
+Added credit system - requires 5 plastic items before activating DC motor
+Updated to support dual-input edge detection model
+"""
+
+import time
+import numpy as np
+import tensorflow as tf
+from picamera2 import Picamera2
+from PIL import Image
+import RPi.GPIO as GPIO
+from RPLCD.i2c import CharLCD
+import cv2
+import os
+import glob
+import serial
+import threading
+import serial.tools.list_ports
+
+# GPIO setup
+BUTTON_PIN = 17  # Button for user input
+
+
+# Serial communication setup
+BAUD_RATE = 9600
+SERIAL_TIMEOUT = 1
+
+# LCD setup (you may need to change the I2C address)
+LCD_ADDRESS = 0x27  # Common address, use i2cdetect -y 1 to find yours
+
+# Model path
+MODEL_PATH = "RVM_edge.keras"  # Updated to use the new edge detection model
+USE_EDGE_DETECTION = True      # Set to True to use the new edge detection model
+
+# Categories (matching your model training)
+CATEGORIES = ["plastic_bottle", "waste"]  # Updated to match new model categories
+
+# Classification configuration
+PLASTIC_CONFIDENCE_THRESHOLD = 0.8  # Minimum confidence needed for plastic classification
+PLASTIC_CREDIT_THRESHOLD = 5  # Number of plastics needed to activate the DC motor
+WEIGHT_THRESHOLD = 50  # Weight threshold in grams (must match Arduino definition)
+
+# Image saving configuration
+IMAGE_FOLDER = "images"  # Folder to save images
+IMAGE_PREFIX = "image"  # Prefix for image filenames
+
+# Serial communication globals
+ser = None
+arduino_ready = False
+arduino_processing = False  # New flag to track if Arduino is actively processing
+serial_lock = threading.Lock()
+last_command_time = 0  # Track when the last command was sent
+
+# Credit system
+plastic_credits = 0  # Current number of plastic credits
+
+# Edge detection parameters
+LOW_THRESHOLD = 50
+HIGH_THRESHOLD = 150
+
+def extract_edge_features(img, low_threshold=LOW_THRESHOLD, high_threshold=HIGH_THRESHOLD):
+    """Extract edge features using Canny edge detection"""
+    # Convert to grayscale if needed
+    if len(img.shape) == 3:
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img
+    
+    # Apply Gaussian blur to reduce noise
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    
+    # Apply Canny edge detection
+    edges = cv2.Canny(blurred, low_threshold, high_threshold)
+    
+    # Convert back to 3 channels
+    edges_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
+    
+    return edges_rgb
+
+def find_arduino_port():
+    """
+    Auto-detect Arduino serial port
+    Returns the first available Arduino port or None if not found
+    """
+    print("Searching for Arduino...")
+    
+    # Check common Arduino port names first
+    common_ports = ['/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyUSB0', '/dev/ttyUSB1']
+    
+    # Try common ports first (faster than scanning all ports)
+    for port in common_ports:
+        try:
+            s = serial.Serial(port, BAUD_RATE, timeout=1)
+            s.close()
+            print(f"Found potential Arduino at {port}")
+            return port
+        except (serial.SerialException, OSError):
+            pass
+    
+    # If common ports fail, try to find all available ports
+    print("Common ports not found, scanning all serial ports...")
+    ports = list(serial.tools.list_ports.comports())
+    
+    for port in ports:
+        # Arduino devices often have "Arduino" or "USB" in their description
+        port_name = port.device
+        description = port.description.lower()
+        
+        print(f"Found port: {port_name} - {description}")
+        
+        # Check if this looks like an Arduino
+        if "arduino" in description or "acm" in port_name.lower() or "usb" in description:
+            try:
+                s = serial.Serial(port_name, BAUD_RATE, timeout=1)
+                s.close()
+                print(f"Found Arduino at {port_name}")
+                return port_name
+            except (serial.SerialException, OSError) as e:
+                print(f"Could not open {port_name}: {e}")
+    
+    print("No Arduino found! Check connections and permissions.")
+    return None
+
+def get_next_image_number():
+    """Get the next sequential number for image naming"""
+    # Make sure the folder exists
+    os.makedirs(IMAGE_FOLDER, exist_ok=True)
+    
+    # Find existing image files
+    pattern = os.path.join(IMAGE_FOLDER, f"{IMAGE_PREFIX}*.png")
+    existing_files = glob.glob(pattern)
+    
+    if not existing_files:
+        return 1  # Start with 1 if no files exist
+    
+    # Extract numbers from existing filenames
+    numbers = []
+    for file in existing_files:
+        base = os.path.basename(file)
+        # Remove prefix and extension, convert to int
+        try:
+            num = int(base[len(IMAGE_PREFIX):-4])
+            numbers.append(num)
+        except ValueError:
+            continue
+    
+    # Return the next number in sequence
+    return max(numbers) + 1 if numbers else 1
+
+def save_image(image):
+    """Save image with sequential naming"""
+    next_num = get_next_image_number()
+    filename = f"{IMAGE_PREFIX}{next_num:03d}.png"
+    filepath = os.path.join(IMAGE_FOLDER, filename)
+    
+    # Save image
+    Image.fromarray(image).save(filepath)
+    print(f"Image saved as {filepath}")
+    
+    return filepath
+
+def preprocess_image(image, target_size=(224, 224), include_edges=USE_EDGE_DETECTION):
+    """Preprocess the image for model inference"""
+    # Create a copy to avoid modifying the original
+    img = image.copy()
+    
+    # Resize
+    img = cv2.resize(img, target_size)
+    
+    # Convert to RGB by taking only the first 3 channels if image has 4 channels
+    if len(img.shape) == 3 and img.shape[2] == 4:
+        img = img[:, :, :3]  # Take only the first 3 channels (RGB)
+    
+    # Convert to RGB if needed (Picamera2 returns BGR)
+    if len(img.shape) == 3 and img.shape[2] == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    
+    # Save original image for debugging
+    debug_dir = os.path.join(IMAGE_FOLDER, "debug")
+    os.makedirs(debug_dir, exist_ok=True)
+    
+    # For dual-input model, also prepare edge features
+    if include_edges:
+        # Extract edge features
+        edge_img = extract_edge_features(img.copy(), LOW_THRESHOLD, HIGH_THRESHOLD)
+        
+        # Save edge image for debugging
+        debug_edge_path = os.path.join(debug_dir, f"edge_{time.strftime('%Y%m%d_%H%M%S')}.png")
+        cv2.imwrite(debug_edge_path, edge_img)
+        print(f"Saved edge image for debugging: {debug_edge_path}")
+        
+        edge_img = edge_img.astype(np.float32) / 255.0  # Normalize edges
+        
+        # Convert regular image to float and preprocess for MobileNetV2
+        img = img.astype(np.float32)
+        img = tf.keras.applications.mobilenet_v2.preprocess_input(img)
+        
+        # Add batch dimension to both
+        img = np.expand_dims(img, axis=0)
+        edge_img = np.expand_dims(edge_img, axis=0)
+        
+        # Debug print
+        print(f"Processed image shape: {img.shape}, Edge image shape: {edge_img.shape}")
+        
+        return img, edge_img
+    else:
+        # Convert to float and preprocess for standard model
+        img = img.astype(np.float32)
+        img = tf.keras.applications.mobilenet_v2.preprocess_input(img)
+        
+        # Add batch dimension
+        img = np.expand_dims(img, axis=0)
+        
+        # Debug print
+        print(f"Processed image shape: {img.shape}")
+        
+        return img
+
+def parse_arduino_response(line):
+    """Parse Arduino response to extract information including credit count and weight"""
+    global plastic_credits
+    
+    if "INFO: Plastic credits: " in line:
+        try:
+            # Extract the current credit count
+            credit_info = line.split("INFO: Plastic credits: ")[1]
+            current_credits = int(credit_info.split("/")[0])
+            plastic_credits = current_credits
+            print(f"Updated credit count from Arduino: {plastic_credits}")
+        except (ValueError, IndexError) as e:
+            print(f"Error parsing credit info: {e}")
+    
+    # Track if an item was reclassified due to weight
+    if "INFO: Measured weight: " in line and "g" in line:
+        try:
+            # Extract weight value
+            weight_text = line.split("INFO: Measured weight: ")[1]
+            weight = float(weight_text.split(" g")[0])
+            print(f"Detected weight from Arduino: {weight}g")
+            return weight  # Return the weight for processing
+        except (ValueError, IndexError) as e:
+            print(f"Error parsing weight info: {e}")
+    
+    return None  # Return None if no weight was parsed
+
+def serial_reader_thread():
+    """Background thread to continuously read from Arduino"""
+    global arduino_ready, arduino_processing, ser, plastic_credits
+    
+    print("Serial reader thread started")
+    
+    while True:
+        try:
+            if ser and ser.is_open:
+                with serial_lock:
+                    if ser.in_waiting > 0:
+                        line = ser.readline().decode('utf-8').strip()
+                        if line:
+                            print(f"Arduino: {line}")
+                            if "READY" in line:
+                                arduino_ready = True
+                                arduino_processing = False
+                            elif "BUSY" in line:
+                                arduino_ready = False
+                                arduino_processing = True
+                            elif "PROCESSING" in line:
+                                arduino_processing = True
+                            elif "ERROR" in line:
+                                # If we get an error, allow status checks again
+                                if arduino_processing and not arduino_ready:
+                                    print("Arduino reported an error, resetting processing state")
+                                    arduino_processing = False
+                            
+                            # Parse for credit information
+                            parse_arduino_response(line)
+            time.sleep(0.1)
+        except Exception as e:
+            print(f"Serial reader error: {e}")
+            time.sleep(1)
+
+def initialize_hardware():
+    """Initialize camera, LCD, GPIO, serial, and model"""
+    global ser, arduino_ready, plastic_credits
+    
+    print("Initializing hardware...")
+    
+    # Set up GPIO
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    
+    # Auto-detect Arduino
+    arduino_port = find_arduino_port()
+    
+    # Set up serial communication
+    if arduino_port:
+        try:
+            ser = serial.Serial(arduino_port, BAUD_RATE, timeout=SERIAL_TIMEOUT)
+            print(f"Serial connection established on {arduino_port}")
+            
+            # Start serial reader thread
+            reader_thread = threading.Thread(target=serial_reader_thread, daemon=True)
+            reader_thread.start()
+            
+            # Initial handshake with Arduino
+            time.sleep(2)  # Wait for Arduino to reset after serial connection
+            with serial_lock:
+                ser.write(b"HELLO\n")
+            
+            # Wait for initial ready signal
+            timeout = 30
+            start_time = time.time()
+            while not arduino_ready:
+                if time.time() - start_time > timeout:
+                    print("Warning: No ready signal from Arduino. Continuing anyway.")
+                    arduino_ready = True  # Force ready to continue
+                    break
+                time.sleep(0.1)
+            
+        except Exception as e:
+            print(f"Serial connection error: {e}")
+            print("Check if Arduino is connected and permissions are correct.")
+            ser = None
+    else:
+        print("No Arduino detected. Will run without Arduino functionality.")
+    
+    # Set up camera with explicit format
+    picam2 = Picamera2()
+    config = picam2.create_preview_configuration(main={"format": "RGB888"})  # Explicitly request RGB
+    picam2.configure(config)
+    
+    # Set up LCD
+    try:
+        lcd = CharLCD('PCF8574', LCD_ADDRESS, cols=20, rows=4)
+        lcd.clear()
+        lcd.write_string("RVM System Ready")
+        lcd.cursor_pos = (1, 0)
+        lcd.write_string("Press button to")
+        lcd.cursor_pos = (2, 0)
+        lcd.write_string("classify an item")
+        
+        # Initialize credits
+        plastic_credits = 0
+        
+        # Show Arduino status and credits
+        lcd.cursor_pos = (3, 0)
+        if ser:
+            lcd.write_string(f"Credits:0/{PLASTIC_CREDIT_THRESHOLD}")
+        else:
+            lcd.write_string("Arduino: Not found")
+            
+    except Exception as e:
+        print(f"LCD Error: {e}")
+        lcd = None
+    
+    # Load model
+    try:
+        # Check if we're using the dual-input edge detection model
+        model = tf.keras.models.load_model(MODEL_PATH)
+        
+        # Print detailed model information for diagnostics
+        print_model_details(model)
+        
+        # Determine if this is a dual-input model by checking input layers
+        model_info = f"Model loaded from {MODEL_PATH}"
+        # Try to get model inputs to determine if it's a dual-input model
+        try:
+            inputs = model.inputs
+            if len(inputs) > 1:
+                print(f"Detected dual-input model with {len(inputs)} inputs")
+                print(f"Input shapes: {[input.shape for input in inputs]}")
+                global USE_EDGE_DETECTION
+                USE_EDGE_DETECTION = True
+            else:
+                USE_EDGE_DETECTION = False
+                print("Detected single-input model")
+            print(f"Model set to {'use' if USE_EDGE_DETECTION else 'not use'} edge detection")
+        except Exception as e:
+            print(f"Could not determine model input structure: {e}")
+            USE_EDGE_DETECTION = False  # Default to simpler model type
+            
+        print(model_info)
+    except Exception as e:
+        print(f"Model loading error: {e}")
+        if lcd:
+            lcd.clear()
+            lcd.write_string("Model loading error")
+        return None, None, None
+    
+    # Ensure image directory exists
+    os.makedirs(IMAGE_FOLDER, exist_ok=True)
+    print(f"Image save directory: {os.path.abspath(IMAGE_FOLDER)}")
+    
+    return picam2, lcd, model
+
+def cleanup(picam2, lcd):
+    """Clean up resources"""
+    global ser
+    
+    if picam2:
+        picam2.stop()
+    
+    if lcd:
+        lcd.clear()
+        lcd.write_string("System Shutdown")
+        time.sleep(1)
+        lcd.clear()
+    
+    # Close serial connection
+    if ser and ser.is_open:
+        with serial_lock:
+            ser.write(b"SHUTDOWN\n")
+            ser.close()
+    
+    GPIO.cleanup()
+    print("Cleanup complete")
+
+def send_command_to_arduino(command):
+    """Send a command to Arduino over serial"""
+    global ser, last_command_time
+    
+    if not ser or not ser.is_open:
+        print("Serial connection not available")
+        return False
+    
+    # Add delay between commands to prevent them running together
+    current_time = time.time()
+    time_since_last = current_time - last_command_time
+    if time_since_last < 0.5:  # Ensure at least 500ms between commands
+        time.sleep(0.5 - time_since_last)
+    
+    try:
+        with serial_lock:
+            # Make sure each command ends with a newline and flush buffer
+            ser.write(f"{command}\n".encode('utf-8'))
+            ser.flush()  # Ensure data is sent immediately
+        
+        last_command_time = time.time()
+        print(f"Sent to Arduino: {command}")
+        return True
+    except Exception as e:
+        print(f"Error sending to Arduino: {e}")
+        return False
+
+def check_arduino_status():
+    """Check Arduino status but only if not actively processing"""
+    global arduino_processing
+    
+    if not arduino_processing:
+        send_command_to_arduino("STATUS")
+
+def wait_for_arduino_ready():
+    """Wait for Arduino to signal it's ready for next item"""
+    global arduino_ready, arduino_processing
+    
+    # If no Arduino connection, don't wait
+    if not ser:
+        arduino_ready = True
+        return
+    
+    print("Waiting for Arduino to be ready...")
+    
+    # Send a status check but only if we're not already waiting for processing
+    if not arduino_processing:
+        check_arduino_status()
+    
+    timeout = 30  # 30 second timeout
+    start_time = time.time()
+    
+    while not arduino_ready:
+        if time.time() - start_time > timeout:
+            print("Timeout waiting for Arduino. Continuing anyway.")
+            arduino_ready = True  # Force ready to continue
+            arduino_processing = False  # Reset processing flag
+            break
+        
+        # Only check status periodically and only if not already processing
+        if not arduino_processing and (time.time() - last_command_time) > 3:
+            check_arduino_status()
+        
+        time.sleep(0.5)
+    
+    print("Arduino is ready for next item")
+
+def check_container_fullness():
+    """Request Arduino to check if containers are full"""
+    if not ser:
+        print("Serial connection not available. Cannot check containers.")
+        return False
+    
+    if arduino_ready:
+        arduino_ready = False  # Mark as busy
+        arduino_processing = True  # Mark as processing
+        
+        # Send container check command
+        send_command_to_arduino("CHECK_CONTAINERS")
+        
+        # Wait for Arduino to complete the check
+        wait_for_arduino_ready()
+        return True
+    else:
+        print("Arduino busy. Cannot check containers now.")
+        return False
+
+def update_lcd_credit_display(lcd):
+    """Update the credits display on the LCD"""
+    if lcd:
+        lcd.cursor_pos = (3, 0)
+        lcd.write_string(f"Credits:{plastic_credits}/{PLASTIC_CREDIT_THRESHOLD}   ")  # Extra spaces to clear line
+
+# Add diagnostic function
+def print_model_details(model):
+    """Print detailed information about the model to help diagnostics"""
+    print("\n--- MODEL DETAILS ---")
+    print(f"Model type: {type(model)}")
+    try:
+        # Display input details
+        print("\nModel inputs:")
+        for i, inp in enumerate(model.inputs):
+            print(f"  Input {i}: shape={inp.shape}, dtype={inp.dtype.name}")
+        
+        # Display output details
+        print("\nModel outputs:")
+        for i, out in enumerate(model.outputs):
+            print(f"  Output {i}: shape={out.shape}, dtype={out.dtype.name}")
+        
+        # Get summary
+        print("\nModel summary:")
+        model.summary(line_length=100)
+    except Exception as e:
+        print(f"Error getting model details: {e}")
+    print("--------------------\n")
+
+def main():
+    global arduino_ready, arduino_processing, plastic_credits
+    
+    # Initialize hardware
+    picam2, lcd, model = initialize_hardware()
+    
+    if model is None:
+        print("Failed to initialize hardware. Exiting.")
+        return
+    
+    # Start camera
+    picam2.start()
+    print("System ready. Press button to classify an item...")
+    
+    # If no Arduino, set ready flag to true
+    if not ser:
+        arduino_ready = True
+    
+    status_check_time = time.time()
+    weight_measurement = None  # Track weight measurement for reclassification
+    
+    try:
+        while True:
+            # Check if Arduino is ready or if we're running without Arduino
+            if arduino_ready:
+                # Check if button is pressed
+                if GPIO.input(BUTTON_PIN) == GPIO.LOW:
+                    if lcd:
+                        lcd.clear()
+                        lcd.write_string("Processing your Item...")
+                    
+                    print("Button pressed. Capturing image...")
+                    
+                    # Reset weight measurement for new detection
+                    weight_measurement = None
+                    
+                    # Capture image
+                    image = picam2.capture_array()
+                    
+                    # Save image with sequential naming
+                    saved_path = save_image(image)
+                    
+                    # Preprocess image
+                    if USE_EDGE_DETECTION:
+                        img_processed, edge_processed = preprocess_image(image)
+                        
+                        # Run inference with dual inputs
+                        raw_prediction = model.predict([img_processed, edge_processed])[0][0]
+                        print(f"Raw model output: {raw_prediction}")
+                        
+                        # Try adjusting the threshold (default is 0.5)
+                        prediction = raw_prediction
+                        # Use a different threshold if needed
+                        threshold = 0.7  # Try increasing threshold to favor plastic classification
+                    else:
+                        img_processed = preprocess_image(image, include_edges=False)
+                        
+                        # Run inference with single input
+                        raw_prediction = model.predict(img_processed)[0][0]
+                        print(f"Raw model output: {raw_prediction}")
+                        prediction = raw_prediction
+                        threshold = 0.5  # Standard threshold
+                    
+                    # Print prediction details
+                    print(f"Raw prediction value: {raw_prediction}")
+                    print(f"Classification threshold: {threshold}")
+                    
+                    # Determine class (for binary classification)
+                    # Note: In our improved model, plastic_bottle is class 0, waste is class 1
+                    predicted_class = 1 if prediction > threshold else 0
+                    confidence = prediction if predicted_class == 1 else 1 - prediction
+                    
+                    # Get base class name
+                    base_class_name = CATEGORIES[predicted_class]
+                    print(f"Base prediction: {base_class_name} with confidence {confidence:.4f}")
+                    
+                    # Apply confidence threshold for plastic classification
+                    is_plastic = (predicted_class == 0)  # plastic_bottle is class 0
+                    
+                    # If it's predicted as plastic but has low confidence, treat as waste
+                    reclassified = False
+                    reclassification_reason = ""
+                    
+                    if is_plastic and confidence < PLASTIC_CONFIDENCE_THRESHOLD:
+                        is_plastic = False  # Change to waste
+                        reclassified = True
+                        reclassification_reason = "low confidence"
+                        print(f"Low confidence plastic detection ({confidence:.2f}), reclassifying as waste")
+                    
+                    # Final class name after potential reclassification
+                    # For Arduino, we still need to send "PLASTIC" or "WASTE"
+                    arduino_command = "PLASTIC" if is_plastic else "WASTE"
+                    display_class = "plastic bottle" if is_plastic else "waste"
+                    
+                    # Display result with additional info about reclassification if needed
+                    print(f"Prediction: {display_class} (Confidence: {confidence:.2f})")
+                    if reclassified:
+                        print(f"Original prediction was {base_class_name} but reclassified due to {reclassification_reason}")
+                    
+                    if lcd:
+                        lcd.clear()
+                        lcd.write_string(f"Item: {display_class}")
+                        lcd.cursor_pos = (1, 0)
+                        lcd.write_string(f"Confidence: {confidence:.2f}")
+                        lcd.cursor_pos = (2, 0)
+                        lcd.write_string(f"Saved: {os.path.basename(saved_path)}")
+                        
+                        # Update credit display
+                        update_lcd_credit_display(lcd)
+                    
+                    # Only send to Arduino if we have a connection
+                    if ser:
+                        if lcd:
+                            lcd.cursor_pos = (3, 0)
+                            lcd.write_string("Processing item...")
+                        
+                        # Send classification result to Arduino
+                        arduino_ready = False  # Mark as busy
+                        arduino_processing = True  # Mark as processing
+                        
+                        # Send the initial classification to Arduino
+                        send_command_to_arduino(arduino_command)
+                        
+                        # Wait for the Arduino to process and collect weight data
+                        if lcd:
+                            lcd.clear()
+                            lcd.write_string("Processing your Item...")
+                            lcd.cursor_pos = (1, 0)
+                            lcd.write_string("Please wait...")
+                            if is_plastic:
+                                # Show potential credit update (tentative - depends on weight check)
+                                # Credits will only be incremented if weight is under threshold
+                                potential_credits = plastic_credits + 1
+                                lcd.cursor_pos = (2, 0)
+                                lcd.write_string(f"Potential credits: {potential_credits}/{PLASTIC_CREDIT_THRESHOLD}")
+                        
+                        # Monitor Arduino responses for weight info (process asynchronously)
+                        start_time = time.time()
+                        while arduino_processing and (time.time() - start_time) < 15:  # 15 second timeout
+                            # Process any available serial data
+                            if ser and ser.is_open:
+                                with serial_lock:
+                                    if ser.in_waiting > 0:
+                                        line = ser.readline().decode('utf-8').strip()
+                                        if line:
+                                            print(f"Arduino: {line}")
+                                            
+                                            # Check for weight data
+                                            weight = parse_arduino_response(line)
+                                            if weight is not None:
+                                                weight_measurement = weight
+                                                
+                                                # If plastic item but weight exceeds threshold, reclassify on LCD
+                                                if is_plastic and weight > WEIGHT_THRESHOLD:
+                                                    print(f"Plastic item weight ({weight}g) exceeds threshold ({WEIGHT_THRESHOLD}g)")
+                                                    print("Arduino will handle as waste - updating display")
+                                                    
+                                                    # Update LCD display
+                                                    if lcd:
+                                                        lcd.clear()
+                                                        lcd.write_string("Reclassified as waste")
+                                                        lcd.cursor_pos = (1, 0)
+                                                        lcd.write_string(f"Weight: {weight}g")
+                                                        lcd.cursor_pos = (2, 0)
+                                                        lcd.write_string(f"Exceeds {WEIGHT_THRESHOLD}g limit")
+                                                        lcd.cursor_pos = (3, 0)
+                                                        lcd.write_string(f"Credits:{plastic_credits}/{PLASTIC_CREDIT_THRESHOLD}")
+                                                        time.sleep(2)  # Show message briefly
+                                            
+                                            # Check if ready
+                                            if "READY" in line:
+                                                arduino_ready = True
+                                                arduino_processing = False
+                                                break
+                            
+                            time.sleep(0.1)  # Small delay to prevent CPU hogging
+                        
+                        # Wait for Arduino to signal it's ready for next item
+                        wait_for_arduino_ready()
+                        
+                        # Update LCD with actual credit count from Arduino
+                        if lcd:
+                            update_lcd_credit_display(lcd)
+                    
+                    if lcd:
+                        lcd.clear()
+                        lcd.write_string("Ready for next item")
+                        lcd.cursor_pos = (1, 0)
+                        lcd.write_string("Press button again..")
+                        # Display credit status
+                        update_lcd_credit_display(lcd)
+                        print("Ready for next item..")
+                    
+                    # Wait for button release with debounce
+                    time.sleep(0.5)
+                    while GPIO.input(BUTTON_PIN) == GPIO.LOW:
+                        time.sleep(0.1)
+            else:
+                # Only check Arduino status periodically (every 5 seconds), not continuously
+                current_time = time.time()
+                if current_time - status_check_time > 5:
+                    if lcd:
+                        lcd.clear()
+                        lcd.write_string("Processing your Item...")
+                        lcd.cursor_pos = (1, 0)
+                        lcd.write_string("Please Wait Patiently...")
+                        # Display credit status
+                        update_lcd_credit_display(lcd)
+                    
+                    # Only check status if not processing
+                    if not arduino_processing:
+                        check_arduino_status()
+                    
+                    status_check_time = current_time
+            
+            time.sleep(0.1)  # Reduce CPU usage
+    
+    except KeyboardInterrupt:
+        print("\nProgram terminated by user")
+    finally:
+        cleanup(picam2, lcd)
+
+if __name__ == "__main__":
+    main() 
