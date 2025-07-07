@@ -6,7 +6,7 @@
 * Acuna, Lanz
 * Belen, Eadric
 * Madamba, Jarl
-* Ylasco, Arlon
+* Ylasco, Arlon Jr.
 
 ---
 ---
