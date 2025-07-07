@@ -16,7 +16,7 @@
 - [X] Fix Load cell readings / load cell wirings
 - [X] Fix Ultrasonic Readings
 - [X] Catfood dispensing system
-- [ ] LCD Verbiage
-- [ ] Load cell disregard negative values
-- [ ] 5 bottle credit system
-      
+- [X] LCD Verbiage
+- [X] Load cell disregard negative values
+- [X] 5 bottle credit system
+- [X] Thesis Done 
