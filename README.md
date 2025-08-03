@@ -40,5 +40,7 @@ community reward system, UN-SDG 12
 ---
 
 Languages Used: Python, C++
+
 Microcontrollers: Raspberry Pi 4B, Arduino Mega
+
 
